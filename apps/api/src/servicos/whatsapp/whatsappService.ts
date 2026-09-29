@@ -5,79 +5,56 @@
  * Regra do projeto: nenhum outro módulo chama a API do WPPConnect diretamente. Assim dá para
  * trocar o provedor (ex.: API oficial da Meta) implementando esta mesma interface.
  *
- * Provedor atual: WPPConnect Server (docker-compose; env WPPCONNECT_URL, WPPCONNECT_SECRET_KEY).
- * Uma sessão por clínica; o nome da sessão é derivado do clinicaId (ver nomeSessao) e os dados
- * da sessão (token, status, telefone) ficam em `whatsapp_sessoes` (use o prisma cru aqui, pois o
- * serviço também é chamado pelos workers, sem request).
+ * Provedores (adaptadores):
+ *   - wppconnectAdapter.ts → WPPConnect Server (padrão; env WPPCONNECT_URL, WPPCONNECT_SECRET_KEY)
+ *   - fakeAdapter.ts       → testes (não envia nada; grava o que "enviou" em memória)
+ * Trocar o provedor: `definirProvedorWhatsapp(adaptador)` (testes) ou mudar `criarProvedorPadrao`.
  *
- * TODO(fase 2 — agente WhatsApp): implementar o provedor WPPConnect com fetch nativo (Node 20+)
- * e o parser do webhook. Pode criar arquivos auxiliares nesta pasta (ex.: wppconnect.ts).
+ * Uma sessão por clínica; o nome da sessão é derivado do clinicaId (ver nomeSessao) e os dados
+ * da sessão (token, status, telefone) ficam em `whatsapp_sessoes` (prisma cru, pois o serviço
+ * também é chamado pelos workers e pelo webhook, sem request).
+ *
+ * ENVIO: `enviarMensagem` só é chamado pelo worker da fila (servicos/whatsapp/envio.ts). Para
+ * mandar uma mensagem de qualquer lugar use `enfileirarMensagem` (envio.ts).
  * ============================================================================
  */
-import type { StatusSessaoWhatsapp } from '@prisma/client';
+import { criarAdaptadorWppconnect } from './wppconnectAdapter';
+import type { WhatsappService } from './tipos';
 
-/** 'desconectada' | 'iniciando' | 'aguardando_qr' | 'conectada' | 'erro' */
-export type StatusConexaoWhatsapp = StatusSessaoWhatsapp;
+export * from './tipos';
 
-export type ResultadoSessao = {
-  status: StatusConexaoWhatsapp;
-  /** QR code como data URL base64 (quando status = 'aguardando_qr'). */
-  qrCode: string | null;
-};
+// ----------------------------------------------------------------------------
+// Fábrica / injeção de dependência
+// ----------------------------------------------------------------------------
 
-export type ResultadoStatus = {
-  status: StatusConexaoWhatsapp;
-  /** Número conectado (só dígitos, formato internacional) quando conectado. */
-  telefone: string | null;
-};
+let provedorAtual: WhatsappService | null = null;
+let fabrica: () => WhatsappService = criarAdaptadorWppconnect;
 
-export type ResultadoEnvio = {
-  /** ID da mensagem no provedor (vai para mensagens_whatsapp.id_externo). */
-  idExterno: string | null;
-};
-
-/** Mensagem recebida, normalizada a partir do webhook do provedor. */
-export type MensagemRecebida = {
-  nomeSessao: string;
-  telefone: string;
-  texto: string;
-  idExterno: string | null;
-  recebidaEm: Date;
-};
-
-export interface WhatsappService {
-  /** Cria/inicia a sessão da clínica no provedor (gera token se preciso). */
-  iniciarSessao(clinicaId: string): Promise<ResultadoSessao>;
-  /** QR code atual para parear o celular. */
-  obterQrCode(clinicaId: string): Promise<ResultadoSessao>;
-  /** Status da conexão da clínica. */
-  status(clinicaId: string): Promise<ResultadoStatus>;
-  /** Desconecta (logout) a sessão da clínica. */
-  desconectar(clinicaId: string): Promise<void>;
-  /**
-   * Envia texto. NÃO chamar direto de rotas: o envio acontece SÓ no worker da fila
-   * (NOMES_FILAS.ENVIO_WHATSAPP), respeitando intervalo, consentimento e limites.
-   */
-  enviarMensagem(clinicaId: string, telefone: string, texto: string): Promise<ResultadoEnvio>;
-  /** Converte o corpo do webhook do provedor numa mensagem recebida (ou null se não for mensagem de texto). */
-  interpretarWebhook(corpo: unknown): MensagemRecebida | null;
+function provedor(): WhatsappService {
+  if (!provedorAtual) provedorAtual = fabrica();
+  return provedorAtual;
 }
 
-/** Nome da sessão no provedor para uma clínica. */
-export function nomeSessao(clinicaId: string): string {
-  return `clinica_${clinicaId.replace(/-/g, '')}`;
+/** Troca o provedor (ex.: adaptador fake nos testes, ou API oficial da Meta no futuro). null = volta ao padrão. */
+export function definirProvedorWhatsapp(novo: WhatsappService | null): void {
+  provedorAtual = novo;
 }
 
-function naoImplementado(metodo: string): never {
-  throw new Error(`whatsappService.${metodo}: não implementado (TODO fase 2 — módulo WhatsApp).`);
+/** Troca a fábrica do provedor padrão (usada quando nenhum provedor foi definido). */
+export function definirFabricaProvedorWhatsapp(nova: () => WhatsappService): void {
+  fabrica = nova;
+  provedorAtual = null;
 }
 
-// TODO(fase 2): substituir pelo provedor WPPConnect real.
+/**
+ * Fachada usada pelo resto do sistema. Delega ao provedor atual.
+ */
 export const whatsappService: WhatsappService = {
-  iniciarSessao: async () => naoImplementado('iniciarSessao'),
-  obterQrCode: async () => naoImplementado('obterQrCode'),
-  status: async () => naoImplementado('status'),
-  desconectar: async () => naoImplementado('desconectar'),
-  enviarMensagem: async () => naoImplementado('enviarMensagem'),
-  interpretarWebhook: () => naoImplementado('interpretarWebhook'),
+  iniciarSessao: (id) => provedor().iniciarSessao(id),
+  obterQrCode: (id) => provedor().obterQrCode(id),
+  status: (id) => provedor().status(id),
+  desconectar: (id) => provedor().desconectar(id),
+  enviarMensagem: (id, tel, txt) => provedor().enviarMensagem(id, tel, txt),
+  interpretarWebhook: (corpo) => provedor().interpretarWebhook(corpo),
 };
+
