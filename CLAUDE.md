@@ -27,33 +27,45 @@ ler antes de implementar qualquer módulo. Setup do ambiente local: **`docs/SETU
 
 **Não usar Next.js** — decisão do usuário: React puro com Vite.
 
-## Estrutura planejada (monorepo com npm workspaces)
+## Estrutura (monorepo)
+
+> **Sem npm workspaces**: o projeto fica num disco de rede (SMB) que não permite symlinks/junctions,
+> e o npm exige symlinks para workspaces. Cada app tem o **próprio `node_modules`**; o `package.json`
+> da raiz orquestra tudo via `npm --prefix` (e o `npm install` da raiz instala os dois apps no postinstall).
+> Para instalar uma dependência nova: `npm install <pacote> --prefix apps/api` (ou `apps/web`).
 
 ```
 Sistema_Clinica/
 ├── CLAUDE.md
-├── docker-compose.yml        # postgres, redis, wppconnect
-├── .env.example
-├── docs/
-│   ├── ARQUITETURA.md
-│   └── SETUP_LOCAL.md
-├── apps/
-│   ├── api/                  # Fastify + Prisma
-│   │   ├── prisma/schema.prisma
-│   │   └── src/
-│   │       ├── modulos/      # um diretório por domínio (pacientes, agendamentos, planos…)
-│   │       ├── plugins/      # auth, tenant, recursos do plano
-│   │       ├── servicos/     # whatsappService, filas
-│   │       └── workers/      # jobs BullMQ (lembretes)
-│   └── web/                  # React + Vite
-│       └── src/
-│           ├── paginas/
-│           │   ├── admin/    # painel super admin (/admin)
-│           │   ├── clinica/  # app da clínica
-│           │   └── publico/  # login, cadastro
-│           ├── componentes/
-│           └── api/          # cliente HTTP + hooks TanStack Query
-└── package.json
+├── docker-compose.yml        # postgres 16, redis 7, wppconnect (volumes nomeados)
+├── .env.example / .env       # ÚNICO .env, na raiz (lido por compose, API, Prisma e testes)
+├── package.json              # scripts orquestradores (dev, build, typecheck, test, db:*)
+├── docs/ (ARQUITETURA.md, SETUP_LOCAL.md)
+├── apps/api/                 # Fastify 5 + Zod 4 + Prisma 6 (ESM, TypeScript estrito, tsx watch / tsup)
+│   ├── prisma/schema.prisma  # modelo de dados completo + migrations + seed.ts
+│   ├── test/                 # vitest (banco clinica_teste)
+│   └── src/
+│       ├── app.ts            # buildApp() — exportado para testes (app.inject)
+│       ├── server.ts         # sobe a API (+ workers se EXECUTAR_WORKERS=true)
+│       ├── worker.ts         # processo só de workers (produção)
+│       ├── config/env.ts     # envs validadas com Zod → `env`
+│       ├── lib/prisma.ts     # prisma CRU (só admin/auth/workers/seed)
+│       ├── plugins/          # auth.ts, tenant.ts, recursos.ts, erros.ts
+│       ├── utils/            # erros.ts (ErroNegocio, ou404), logAcesso.ts, senha.ts, documento.ts
+│       ├── servicos/         # filas.ts (BullMQ/Redis), whatsapp/whatsappService.ts
+│       ├── workers/index.ts  # registro dos workers BullMQ
+│       └── modulos/<nome>/index.ts   # um plugin por domínio (registrados em modulos/index.ts)
+└── apps/web/                 # React 19 + Vite + Tailwind 4 + shadcn/ui + TanStack Query + React Router 7
+    └── src/
+        ├── main.tsx          # providers (QueryClient, AuthProvider, Tooltip, Toaster)
+        ├── rotas/            # index.tsx (router COMPLETO, lazy) + navegacao.ts (menus e papéis)
+        ├── api/              # cliente.ts, sessao.ts, tipos.ts, me.ts, auth.ts + um arquivo por módulo
+        ├── contextos/AuthContext.tsx
+        ├── componentes/ui/   # shadcn/ui gerados
+        ├── componentes/comum/    # CabecalhoPagina, Carregando, EstadoVazio, AvisoLimite, UsoRecurso…
+        ├── componentes/layout/   # LayoutAdmin, LayoutClinica, Guardas (RotaClinica/RotaAdmin)
+        ├── lib/              # utils.ts (cn), formatos.ts (máscaras, CPF/CNPJ, datas, moeda)
+        └── paginas/{admin,clinica,publico}/
 ```
 
 ## Regras que NÃO podem ser quebradas
@@ -79,25 +91,192 @@ Sistema_Clinica/
 - Cada clínica conecta **o próprio número** de WhatsApp (uma sessão WPPConnect por clínica).
 - Lembrete enviado **1 dia antes**; resposta `1` confirma, `2` cancela e avisa a recepção.
 
-## Comandos (a definir quando o esqueleto for criado)
+## Comandos
+
+Todos na **raiz** do projeto (passo a passo completo em `docs/SETUP_LOCAL.md`):
 
 ```bash
-docker compose up -d        # sobe postgres, redis, wppconnect
-npm install
-npm run dev                 # api + web
-npm run db:migrate          # prisma migrate dev
-npm run db:seed             # super admin + plano de teste
+docker compose up -d        # postgres (5432), redis (6379), wppconnect (21465)
+npm install                 # raiz + apps/api + apps/web (postinstall) + prisma generate
+npm run db:migrate          # prisma migrate dev (cria/aplica migrations)
+npm run db:seed             # seed idempotente (super admin, recursos, planos, clínica demo)
+npm run dev                 # API (http://localhost:3333) + Web (http://localhost:5173)
+npm run dev:api | dev:web   # só um dos dois
+npm run dev:worker          # workers em processo separado (use com EXECUTAR_WORKERS=false)
+npm run typecheck           # tsc da API e do Web
+npm run build               # tsup (apps/api/dist) + vite build (apps/web/dist)
+npm test                    # vitest da API (banco clinica_teste, criado automaticamente)
+npm run db:studio           # Prisma Studio
 ```
+
+- O web chama a API por `/api/*` (proxy do Vite remove o `/api`). Rotas da API **não** têm prefixo `/api`.
+- No disco de rede a API leva ~30–90 s para subir em dev (e para reiniciar no `tsx watch`). É normal.
+- Nova migration: edite `schema.prisma` e rode `npm run db:migrate -- --name <nome>`.
+  ⚠️ Na fase 2 (agentes em paralelo) **não** altere o schema sem coordenação com o orquestrador.
+
+### Credenciais do seed (apenas desenvolvimento)
+
+| Área | E-mail | Senha |
+|---|---|---|
+| Super admin (`/admin/login`) | admin@sistema.local | admin123 |
+| Clínica Demo — admin | admin@demo.local | demo123 |
+| Clínica Demo — recepção | recepcao@demo.local | demo123 |
+| Clínica Demo — profissional (Dra. Ana Souza) | profissional@demo.local | demo123 |
+
+A Clínica Demo está no plano **Profissional** (assinatura ativa, limites altos). Para testar o plano
+de **Teste grátis** (tudo limitado a 1), crie uma clínica nova em `/cadastro`.
+
+## Convenções para módulos
+
+### API — onde fica cada coisa
+
+- Cada domínio é um diretório `apps/api/src/modulos/<nome>/` com `index.ts` exportando
+  `default` (plugin `FastifyPluginAsyncZod`) e `prefixo`. **Todos já estão registrados** em
+  `src/modulos/index.ts` — não edite esse arquivo. Crie arquivos auxiliares na própria pasta
+  (`rotas.ts`, `servico.ts`, `esquemas.ts`…).
+- Módulos: `auth` e `me` (prontos); `admin-planos`, `admin-clinicas`, `profissionais` (+ horários
+  e bloqueios), `convenios`, `usuarios`, `pacientes` (+ alergias/medicações), `prontuario` (+ anexos),
+  `agendamentos`, `whatsapp` (+ webhook `POST /webhooks/whatsapp`). Cada stub traz no topo as
+  rotas previstas, guards e regras.
+- **Não** instale dependências nem edite arquivos compartilhados (`plugins/`, `utils/`, `app.ts`,
+  `schema.prisma`, `rotas/index.tsx`, `api/cliente.ts`…) sem combinar com o orquestrador.
+
+### API — autenticação e papéis (`src/plugins/auth.ts`)
+
+```ts
+import { autenticarClinica, autenticarAdmin, exigirPapel } from '../../plugins/auth';
+
+const modulo: FastifyPluginAsyncZod = async (app) => {
+  app.addHook('onRequest', autenticarClinica);                  // todas as rotas do módulo
+  app.get('/', async (request) => request.db.convenio.findMany({ orderBy: { nome: 'asc' } }));
+  app.post('/', { preHandler: exigirPapel('admin', 'recepcao'), schema: { body: Corpo } }, handler);
+};
+```
+
+- Tokens: plataforma `{ tipo: 'plataforma', usuarioId }`; clínica `{ tipo: 'clinica', usuarioId, clinicaId, papel, profissionalId }`.
+- `autenticarClinica` recarrega o usuário do banco (papel/ativo atuais) e preenche:
+  `request.usuarioClinica` `{ id, nome, email, papel, profissionalId, clinicaId }`, `request.clinicaId`,
+  `request.db`, `request.assinatura` `{ status, somenteLeitura }`. Assinatura vencida/cancelada/bloqueada
+  ⇒ métodos não-GET recebem 403 `assinatura_inativa` automaticamente.
+- `autenticarAdmin` preenche `request.adminPlataforma` `{ id, nome, email }`. Módulos `admin-*` usam o **prisma cru**.
+- `exigirPapel(...papeis)` autentica (se preciso) e exige o papel. Recepção **nunca** acessa prontuário.
+
+### API — isolamento de tenant (`request.db`, `src/plugins/tenant.ts`)
+
+- `request.db` é o Prisma com filtro automático de `clinica_id` (leitura, escrita, count, aggregate,
+  groupBy, updateMany, deleteMany, upsert…). Em `create` **não passe `clinica_id`** (é injetado do token;
+  se vier, é sobrescrito). `update` não consegue trocar `clinica_id`.
+- `findUnique` de registro de outra clínica retorna `null`; `update/delete` dão 404 (P2025).
+- `request.db.$transaction(async (tx) => …)` — o `tx` também é filtrado.
+- **Não use nested writes** em modelos de clínica (`data: { alergias: { create: [...] } }`): crie em
+  chamadas separadas dentro de uma transação.
+- **Valide FKs recebidas no body** buscando pelo `request.db` antes de gravar:
+  `ou404(await request.db.paciente.findUnique({ where: { id: body.paciente_id } }), 'Paciente não encontrado.')`.
+- SQL cru (`$queryRaw`) não é filtrado — filtre `clinica_id = request.clinicaId` manualmente.
+- `prisma` cru (`src/lib/prisma.ts`) só em admin, auth, workers, webhook e seed. Um `create` de modelo
+  de clínica pelo prisma cru **sem** `clinica_id` falha no banco (falha fechada).
+- `prontuario_registros` é imutável: update/delete lançam `prontuario_imutavel` (extensão) e o banco
+  tem trigger. Correção = novo registro com `corrige_registro_id`.
+
+### API — limites do plano (`src/plugins/recursos.ts`)
+
+```ts
+import { exigirRecurso, verificarLimite, assegurarLimite, assegurarRecurso } from '../../plugins/recursos';
+
+// preHandlers (autenticam antes, se usados com exigirPapel/autenticarClinica)
+app.post('/', { preHandler: [exigirPapel('admin'), verificarLimite('max_profissionais')] }, handler);
+app.post('/conectar', { preHandler: [exigirPapel('admin'), exigirRecurso('whatsapp')] }, handler);
+
+// dentro de transação (trava por clínica+recurso, evita corrida) — recomendado para agendamentos/anexos
+await request.db.$transaction(async (tx) => {
+  await assegurarLimite(request.clinicaId, 'max_agendamentos', { tx });
+  return tx.agendamento.create({ data: {...} });
+});
+// workers: await assegurarLimite(clinicaId, 'max_mensagens')
+```
+
+- Códigos: `max_profissionais`, `max_recepcionistas`, `max_agendamentos`, `max_anexos`, `whatsapp`,
+  `max_mensagens`, `financeiro`, `agendamento_online`.
+- Contagem: profissionais **ativos**; usuários `recepcao` **ativos** (admin não conta); agendamentos e
+  anexos **criados** no período; mensagens de **saída** com status `pendente|enviada` no período.
+  Período `mensal` = desde o dia 1 do mês no fuso da clínica.
+- Ao reativar profissional/recepcionista ou mudar papel para `recepcao`, chame `assegurarLimite` também.
+- Estouro ⇒ 403 `{ erro: 'limite_atingido', recurso, limite, uso, mensagem }`; recurso desligado ⇒
+  403 `{ erro: 'recurso_indisponivel', recurso, mensagem }`.
+- `obterUsoERecursos(clinicaId)` devolve `{ assinatura, plano, recursos }` (usado no `/me` e útil no admin).
+
+### API — erros, validação e LGPD
+
+- Erros de negócio: `throw new ErroNegocio(status, 'codigo', 'Mensagem em pt-BR.', extras?)`
+  ⇒ `{ erro: 'codigo', mensagem, ...extras }`. Atalhos: `erros.naoEncontrado()`, `erros.proibido()`,
+  `erros.conflito(msg)`, `erros.invalido(msg)`, `ou404(valor, msg)` (`src/utils/erros.ts`).
+- Validação: schemas Zod no `schema` da rota (`body`, `params`, `querystring`, `response` opcional). Falha
+  ⇒ 400 `{ erro: 'validacao', mensagem, detalhes: [{ campo: 'body.nome', mensagem }] }`. Use
+  `z.coerce` em querystring; `z.uuid()` em ids; mensagens de validação em pt-BR.
+- Prisma P2002 ⇒ 409 `registro_duplicado`; P2025 ⇒ 404; P2003 ⇒ 409 `registro_vinculado` (automático).
+- LGPD: `await logAcesso(request, 'visualizar' | 'criar' | 'baixar', 'prontuario', id)` ao ver/criar
+  prontuário e baixar anexos (`src/utils/logAcesso.ts`).
+- Uploads: `@fastify/multipart` já registrado (`await request.file()`, limite `UPLOAD_MAX_MB`); salve
+  em `env.UPLOAD_DIR_ABS/<clinicaId>/...` e grave o caminho relativo em `anexos.caminho`. Nunca sirva a
+  pasta como estática — download só por rota autenticada.
+- Datas: armazenadas em UTC (`DateTime`); fuso da clínica em `clinicas.fuso_horario`
+  (`date-fns-tz`). Grade de horários em `"HH:mm"` no fuso da clínica; `dia_semana` 0 = domingo.
+
+### API — WhatsApp e filas
+
+- `src/servicos/whatsapp/whatsappService.ts`: interface `WhatsappService` com `iniciarSessao(clinicaId)`,
+  `obterQrCode(clinicaId)`, `status(clinicaId)`, `desconectar(clinicaId)`,
+  `enviarMensagem(clinicaId, telefone, texto)`, `interpretarWebhook(corpo)` + `nomeSessao(clinicaId)`.
+  Hoje lança "não implementado" — o módulo WhatsApp implementa (fetch nativo). Nenhum outro módulo chama o WPPConnect.
+- `src/servicos/filas.ts`: `NOMES_FILAS.ENVIO_WHATSAPP` / `NOMES_FILAS.LEMBRETES`, `obterFila(nome)`,
+  `criarWorker(nome, processador)`, `obterConexaoRedis()`, `INTERVALO_ENVIO_MS` (20–40 s),
+  tipos `JobEnvioWhatsapp`/`JobLembretes`, `fecharFilas()`.
+- Workers: registrar em `src/workers/index.ts` (`iniciarWorkers`). Em dev rodam no processo da API
+  (`EXECUTAR_WORKERS=true`); em produção, processo separado (`npm run start:worker`).
+- Webhook: `POST /webhooks/whatsapp?token=WEBHOOK_TOKEN` (o docker-compose já aponta o WPPConnect para
+  `http://host.docker.internal:3333/webhooks/whatsapp?token=...`).
+
+### Web — padrões
+
+- **Cliente HTTP** (`src/api/cliente.ts`): `api.get<T>(caminho, parametros?)`, `api.post/put/patch<T>(caminho, corpo)`,
+  `api.delete`, `api.upload(caminho, formData)`, `api.baixar(caminho)` → `Blob`. Caminhos iguais aos da API
+  (sem `/api`). Rotas `/admin*` usam o token do super admin; as demais, o da clínica. 401 ⇒ logout + login;
+  403 `limite_atingido`/`recurso_indisponivel`/`assinatura_inativa` ⇒ toast automático. Erros são
+  `ErroApi { status, codigo, mensagem, dados, detalhes }`; `mensagemDeErro(e)` para toasts.
+- **Hooks por módulo** em `src/api/<modulo>.ts` (stubs já criados com o padrão comentado): objeto de
+  chaves (`chavesX.todos/lista/detalhe`), `useQuery` para leitura, `useMutation` com
+  `invalidateQueries` no `onSuccess`. Se a ação consome recurso do plano, invalide também
+  `chavesMe.me`. Chaves do super admin começam com `'admin'`.
+- **Sessão/plano**: `useAuth()` (`tokenClinica`, `tokenAdmin`, `entrarClinica`, `sairClinica`, `entrarAdmin`, `sairAdmin`);
+  `useMe()` → `Me` (`usuario`, `papel`, `clinica`, `assinatura`, `plano`, `recursos`); `useAdminMe()`;
+  `usePodeUsar(codigo)` → `{ pode, motivo, mensagem, limite, uso, restante }` para desabilitar botões
+  (`<Button disabled={!pode} title={mensagem}>`). Tipos compartilhados em `src/api/tipos.ts`.
+- **Página**: arquivo em `src/paginas/...` (já declarado no router, lazy, com guard de papel) exportando
+  `default`. Estrutura: `<CabecalhoPagina titulo descricao acoes />` + conteúdo; `<Carregando />`,
+  `<EstadoVazio />`, `<AvisoLimite codigo />`, `<UsoRecurso codigo />` de `@/componentes/comum`.
+  Formulários: `react-hook-form` + `zodResolver` + `Form/FormField/...` de `@/componentes/ui/form`;
+  feedback com `toast` do `sonner`. Diálogos com `Dialog`/`Sheet`. Máscaras/validações/datas em `@/lib/formatos`.
+- **Papéis no front**: `PAPEIS_ROTA` em `src/rotas/navegacao.ts` (ex.: `PAPEIS_ROTA.prontuario` para
+  esconder abas de prontuário da recepção). Só UX — o backend é quem garante.
+- **UI**: componentes shadcn em `@/componentes/ui/*` (button, input, label, card, table, dialog,
+  dropdown-menu, select, textarea, badge, tabs, sonner, form, checkbox, switch, calendar, popover,
+  alert, skeleton, separator, sheet, avatar, tooltip, scroll-area). Ícones `lucide-react`. Cores via
+  tokens (`bg-primary`, `text-muted-foreground`, `bg-success`, `bg-warning`, `bg-destructive`).
+- **Agenda**: FullCalendar 6 (`@fullcalendar/react`, `core`, `daygrid`, `timegrid`, `interaction`;
+  locale `@fullcalendar/core/locales/pt-br`). As variáveis CSS do FullCalendar já seguem o tema em `index.css`.
 
 ## Status atual
 
 - [x] Levantamento de requisitos e arquitetura (`docs/ARQUITETURA.md`)
 - [x] Instalar Docker Desktop (ver `docs/SETUP_LOCAL.md` — instalação por usuário, PATH OK)
-- [ ] Esqueleto do monorepo + docker-compose
-- [ ] Schema Prisma + seed (super admin, recursos, plano de teste)
-- [ ] Auth (login super admin / usuários da clínica) + auto-cadastro
+- [x] Esqueleto do monorepo + docker-compose
+- [x] Schema Prisma + seed (super admin, recursos, plano de teste)
+- [x] Auth (login super admin / usuários da clínica) + auto-cadastro
+- [x] Plugins compartilhados: auth, tenant (`request.db`), recursos/limites, erros, logAcesso + testes
+- [x] Web: base (tema, shadcn, router completo, guards, layouts, login/cadastro, onboarding, configurações)
 - [ ] Painel admin: planos, recursos, clínicas
 - [ ] Clínica: profissionais + grade de horários + convênios
+- [ ] Usuários da clínica
 - [ ] Pacientes
 - [ ] Agenda
 - [ ] Prontuário + anexos

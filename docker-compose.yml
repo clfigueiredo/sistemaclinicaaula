@@ -1,0 +1,73 @@
+# Infraestrutura local do Sistema Clínica.
+# Volumes NOMEADOS (não bind mount): o diretório do projeto fica num disco de rede (SMB),
+# o que deixa o Postgres lento/instável se os dados ficarem nele.
+# As variáveis ${...} vêm do arquivo .env da raiz (lido automaticamente pelo docker compose).
+name: sistema-clinica
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: clinica-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-clinica}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clinica}
+      POSTGRES_DB: ${POSTGRES_DB:-clinica}
+      TZ: America/Sao_Paulo
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_dados:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clinica} -d ${POSTGRES_DB:-clinica}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: clinica-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_dados:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # WPPConnect Server (não oficial). Uma sessão por clínica.
+  # A API se comunica com ele SOMENTE via src/servicos/whatsapp/whatsappService.ts.
+  # O webhook chama a API rodando no host (fora do Docker) — por isso host.docker.internal.
+  wppconnect:
+    image: wppconnect/server-cli:latest
+    container_name: clinica-wppconnect
+    restart: unless-stopped
+    command:
+      - --secretKey
+      - ${WPPCONNECT_SECRET_KEY:-troque-esta-chave}
+      - --port
+      - "21465"
+      - --startAllSession
+      - --webhook-url
+      - http://host.docker.internal:3333/webhooks/whatsapp?token=${WEBHOOK_TOKEN:-troque-este-token}
+      - --no-webhook-onPresenceChanged
+      - --no-webhook-onParticipantsChanged
+      - --log-level
+      - info
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "21465:21465"
+    volumes:
+      - wpp_tokens:/usr/src/wpp-server/tokens
+      - wpp_userdata:/usr/src/wpp-server/userDataDir
+
+volumes:
+  postgres_dados:
+  redis_dados:
+  wpp_tokens:
+  wpp_userdata:

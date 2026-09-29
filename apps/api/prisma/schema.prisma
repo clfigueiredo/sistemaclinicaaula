@@ -1,0 +1,580 @@
+// ============================================================================
+// Sistema Clínica — schema do banco (PostgreSQL + Prisma)
+//
+// Convenções:
+// - Nomes de tabelas/colunas em português, snake_case, sem acento.
+// - Campos do Prisma já usam snake_case (ex.: `clinica_id`), iguais às colunas.
+// - Modelos de PLATAFORMA não têm clinica_id: UsuarioPlataforma, Recurso, Plano,
+//   PlanoRecurso, Clinica, Assinatura.
+// - Modelos de CLÍNICA têm `clinica_id` obrigatório + índice. O default dbgenerated(current_setting('app.clinica_id'))
+//   existe só para o campo ficar OPCIONAL nos tipos do create: a extensão tenant sempre injeta o valor do
+//   token; se alguém criar sem clinica_id pelo prisma cru, o insert FALHA no banco (falha fechada). O filtro por tenant é
+//   aplicado automaticamente pela extensão em src/plugins/tenant.ts (request.db).
+//   Ao adicionar um modelo de clínica, inclua-o em MODELOS_DE_CLINICA nesse arquivo.
+// - IDs são UUID.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------------------------------------------------------
+// Enums
+// ----------------------------------------------------------------------------
+
+enum PapelUsuario {
+  admin
+  recepcao
+  profissional
+
+  @@map("papel_usuario")
+}
+
+enum StatusClinica {
+  ativa
+  inativa
+
+  @@map("status_clinica")
+}
+
+enum StatusAssinatura {
+  teste
+  ativa
+  vencida
+  cancelada
+  bloqueada
+
+  @@map("status_assinatura")
+}
+
+enum TipoRecurso {
+  limite
+  booleano
+
+  @@map("tipo_recurso")
+}
+
+enum PeriodoLimite {
+  total
+  mensal
+
+  @@map("periodo_limite")
+}
+
+enum Sexo {
+  feminino
+  masculino
+  outro
+
+  @@map("sexo")
+}
+
+enum StatusAgendamento {
+  agendado
+  confirmado
+  compareceu
+  atendido
+  cancelado
+  faltou
+
+  @@map("status_agendamento")
+}
+
+enum TipoAgendamento {
+  particular
+  convenio
+
+  @@map("tipo_agendamento")
+}
+
+enum StatusSessaoWhatsapp {
+  desconectada
+  iniciando
+  aguardando_qr
+  conectada
+  erro
+
+  @@map("status_sessao_whatsapp")
+}
+
+enum TipoMensagem {
+  lembrete
+  confirmacao
+  aviso
+
+  @@map("tipo_mensagem")
+}
+
+enum DirecaoMensagem {
+  entrada
+  saida
+
+  @@map("direcao_mensagem")
+}
+
+enum StatusMensagem {
+  pendente
+  enviada
+  falhou
+  recebida
+
+  @@map("status_mensagem")
+}
+
+// ----------------------------------------------------------------------------
+// Plataforma (sem clinica_id)
+// ----------------------------------------------------------------------------
+
+model UsuarioPlataforma {
+  id            String   @id @default(uuid()) @db.Uuid
+  nome          String
+  email         String   @unique
+  senha_hash    String
+  ativo         Boolean  @default(true)
+  criado_em     DateTime @default(now())
+  atualizado_em DateTime @updatedAt
+
+  @@map("usuarios_plataforma")
+}
+
+/// Catálogo fixo de recursos (espelha CATALOGO_RECURSOS em src/plugins/recursos.ts).
+model Recurso {
+  codigo    String      @id
+  nome      String
+  descricao String?
+  tipo      TipoRecurso
+  ordem     Int         @default(0)
+
+  planos PlanoRecurso[]
+
+  @@map("recursos")
+}
+
+model Plano {
+  id             String   @id @default(uuid()) @db.Uuid
+  nome           String
+  descricao      String?
+  preco          Decimal  @default(0) @db.Decimal(10, 2)
+  ativo          Boolean  @default(true)
+  /// Plano atribuído no auto-cadastro. Só um pode estar marcado (índice parcial único na migration).
+  plano_cadastro Boolean  @default(false)
+  criado_em      DateTime @default(now())
+  atualizado_em  DateTime @updatedAt
+
+  recursos    PlanoRecurso[]
+  assinaturas Assinatura[]
+
+  @@map("planos")
+}
+
+model PlanoRecurso {
+  id             String        @id @default(uuid()) @db.Uuid
+  plano_id       String        @db.Uuid
+  recurso_codigo String
+  habilitado     Boolean       @default(true)
+  /// null = ilimitado (para recursos do tipo `limite`).
+  limite         Int?
+  periodo        PeriodoLimite @default(total)
+
+  plano   Plano   @relation(fields: [plano_id], references: [id], onDelete: Cascade)
+  recurso Recurso @relation(fields: [recurso_codigo], references: [codigo])
+
+  @@unique([plano_id, recurso_codigo])
+  @@map("plano_recursos")
+}
+
+model Clinica {
+  id            String        @id @default(uuid()) @db.Uuid
+  nome          String
+  /// CNPJ ou CPF, somente dígitos.
+  documento     String        @unique
+  responsavel   String?
+  email         String?
+  telefone      String?
+  endereco      String?
+  cidade        String?
+  uf            String?       @db.VarChar(2)
+  cep           String?
+  fuso_horario  String        @default("America/Sao_Paulo")
+  status        StatusClinica @default(ativa)
+  criado_em     DateTime      @default(now())
+  atualizado_em DateTime      @updatedAt
+
+  assinatura           Assinatura?
+  usuarios             Usuario[]
+  profissionais        Profissional[]
+  profissional_horarios ProfissionalHorario[]
+  bloqueios_agenda     BloqueioAgenda[]
+  convenios            Convenio[]
+  pacientes            Paciente[]
+  paciente_alergias    PacienteAlergia[]
+  paciente_medicacoes  PacienteMedicacao[]
+  agendamentos         Agendamento[]
+  prontuario_registros ProntuarioRegistro[]
+  anexos               Anexo[]
+  whatsapp_sessao      WhatsappSessao?
+  mensagens_whatsapp   MensagemWhatsapp[]
+  logs_acesso          LogAcesso[]
+
+  @@map("clinicas")
+}
+
+/// Assinatura ATUAL da clínica (uma por clínica). Troca de plano = update.
+model Assinatura {
+  id            String           @id @default(uuid()) @db.Uuid
+  clinica_id    String           @unique @db.Uuid
+  plano_id      String           @db.Uuid
+  status        StatusAssinatura @default(teste)
+  inicio        DateTime         @default(now())
+  /// null = não expira (ex.: teste grátis).
+  expira_em     DateTime?
+  criado_em     DateTime         @default(now())
+  atualizado_em DateTime         @updatedAt
+
+  clinica Clinica @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  plano   Plano   @relation(fields: [plano_id], references: [id])
+
+  @@index([plano_id])
+  @@map("assinaturas")
+}
+
+// ----------------------------------------------------------------------------
+// Clínica (todas com clinica_id)
+// ----------------------------------------------------------------------------
+
+model Usuario {
+  id              String       @id @default(uuid()) @db.Uuid
+  clinica_id      String       @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  nome            String
+  email           String
+  senha_hash      String
+  papel           PapelUsuario
+  /// Vínculo opcional com um profissional (obrigatório para papel `profissional`; opcional para `admin`).
+  profissional_id String?      @unique @db.Uuid
+  ativo           Boolean      @default(true)
+  ultimo_acesso_em DateTime?
+  criado_em       DateTime     @default(now())
+  atualizado_em   DateTime     @updatedAt
+
+  clinica      Clinica       @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  profissional Profissional? @relation(fields: [profissional_id], references: [id], onDelete: SetNull)
+
+  agendamentos_criados Agendamento[]        @relation("AgendamentoCriadoPor")
+  registros_prontuario ProntuarioRegistro[] @relation("RegistroAutor")
+  anexos_enviados      Anexo[]              @relation("AnexoEnviadoPor")
+  logs_acesso          LogAcesso[]
+
+  @@unique([clinica_id, email])
+  @@index([clinica_id])
+  @@index([email])
+  @@map("usuarios")
+}
+
+model Profissional {
+  id                   String   @id @default(uuid()) @db.Uuid
+  clinica_id           String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  nome                 String
+  especialidade        String?
+  /// CRM, CRO, CRP… (texto livre)
+  registro             String?
+  telefone             String?
+  email                String?
+  duracao_consulta_min Int      @default(30)
+  cor_agenda           String   @default("#0d9488")
+  ativo                Boolean  @default(true)
+  criado_em            DateTime @default(now())
+  atualizado_em        DateTime @updatedAt
+
+  clinica      Clinica               @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  usuario      Usuario?
+  horarios     ProfissionalHorario[]
+  bloqueios    BloqueioAgenda[]
+  agendamentos Agendamento[]
+  registros    ProntuarioRegistro[]
+
+  @@index([clinica_id])
+  @@index([clinica_id, ativo])
+  @@map("profissionais")
+}
+
+/// Grade semanal de atendimento. dia_semana: 0 = domingo … 6 = sábado. Horas "HH:mm" (fuso da clínica).
+model ProfissionalHorario {
+  id              String   @id @default(uuid()) @db.Uuid
+  clinica_id      String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  profissional_id String   @db.Uuid
+  dia_semana      Int      @db.SmallInt
+  hora_inicio     String   @db.VarChar(5)
+  hora_fim        String   @db.VarChar(5)
+  criado_em       DateTime @default(now())
+
+  clinica      Clinica      @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  profissional Profissional @relation(fields: [profissional_id], references: [id], onDelete: Cascade)
+
+  @@index([clinica_id])
+  @@index([clinica_id, profissional_id])
+  @@map("profissional_horarios")
+}
+
+/// Bloqueio de agenda. profissional_id null = clínica toda (feriado, recesso…).
+model BloqueioAgenda {
+  id              String   @id @default(uuid()) @db.Uuid
+  clinica_id      String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  profissional_id String?  @db.Uuid
+  inicio          DateTime
+  fim             DateTime
+  motivo          String?
+  criado_em       DateTime @default(now())
+
+  clinica      Clinica       @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  profissional Profissional? @relation(fields: [profissional_id], references: [id], onDelete: Cascade)
+
+  @@index([clinica_id])
+  @@index([clinica_id, inicio])
+  @@map("bloqueios_agenda")
+}
+
+model Convenio {
+  id            String   @id @default(uuid()) @db.Uuid
+  clinica_id    String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  nome          String
+  ativo         Boolean  @default(true)
+  criado_em     DateTime @default(now())
+  atualizado_em DateTime @updatedAt
+
+  clinica      Clinica       @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  pacientes    Paciente[]
+  agendamentos Agendamento[]
+
+  @@unique([clinica_id, nome])
+  @@index([clinica_id])
+  @@map("convenios")
+}
+
+model Paciente {
+  id                 String    @id @default(uuid()) @db.Uuid
+  clinica_id         String    @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  nome               String
+  /// Somente dígitos.
+  cpf                String?
+  nascimento         DateTime? @db.Date
+  sexo               Sexo?
+  telefone           String?
+  /// Número no formato internacional só com dígitos (ex.: 5511999998888).
+  whatsapp           String?
+  email              String?
+  endereco           String?
+  convenio_id        String?   @db.Uuid
+  numero_carteirinha String?
+  contato_emergencia String?
+  /// Consentimento LGPD para receber mensagens de WhatsApp.
+  aceita_whatsapp    Boolean   @default(false)
+  observacoes        String?
+  ativo              Boolean   @default(true)
+  criado_em          DateTime  @default(now())
+  atualizado_em      DateTime  @updatedAt
+
+  clinica      Clinica              @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  convenio     Convenio?            @relation(fields: [convenio_id], references: [id], onDelete: SetNull)
+  alergias     PacienteAlergia[]
+  medicacoes   PacienteMedicacao[]
+  agendamentos Agendamento[]
+  registros    ProntuarioRegistro[]
+  anexos       Anexo[]
+  mensagens    MensagemWhatsapp[]
+
+  @@unique([clinica_id, cpf])
+  @@index([clinica_id])
+  @@index([clinica_id, nome])
+  @@index([clinica_id, whatsapp])
+  @@map("pacientes")
+}
+
+model PacienteAlergia {
+  id          String   @id @default(uuid()) @db.Uuid
+  clinica_id  String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  paciente_id String   @db.Uuid
+  descricao   String
+  gravidade   String?
+  criado_em   DateTime @default(now())
+
+  clinica  Clinica  @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  paciente Paciente @relation(fields: [paciente_id], references: [id], onDelete: Cascade)
+
+  @@index([clinica_id, paciente_id])
+  @@map("paciente_alergias")
+}
+
+model PacienteMedicacao {
+  id          String   @id @default(uuid()) @db.Uuid
+  clinica_id  String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  paciente_id String   @db.Uuid
+  nome        String
+  dosagem     String?
+  frequencia  String?
+  observacoes String?
+  criado_em   DateTime @default(now())
+
+  clinica  Clinica  @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  paciente Paciente @relation(fields: [paciente_id], references: [id], onDelete: Cascade)
+
+  @@index([clinica_id, paciente_id])
+  @@map("paciente_medicacoes")
+}
+
+model Agendamento {
+  id                  String            @id @default(uuid()) @db.Uuid
+  clinica_id          String            @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  paciente_id         String            @db.Uuid
+  profissional_id     String            @db.Uuid
+  inicio              DateTime
+  fim                 DateTime
+  tipo                TipoAgendamento   @default(particular)
+  convenio_id         String?           @db.Uuid
+  status              StatusAgendamento @default(agendado)
+  observacoes         String?
+  /// Usuário que criou o agendamento.
+  criado_por          String?           @db.Uuid
+  /// Preenchido pelo worker de lembretes (evita envio duplicado).
+  lembrete_enviado_em DateTime?
+  criado_em           DateTime          @default(now())
+  atualizado_em       DateTime          @updatedAt
+
+  clinica      Clinica              @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  paciente     Paciente             @relation(fields: [paciente_id], references: [id], onDelete: Restrict)
+  profissional Profissional         @relation(fields: [profissional_id], references: [id], onDelete: Restrict)
+  convenio     Convenio?            @relation(fields: [convenio_id], references: [id], onDelete: SetNull)
+  criador      Usuario?             @relation("AgendamentoCriadoPor", fields: [criado_por], references: [id], onDelete: SetNull)
+  registros    ProntuarioRegistro[]
+  mensagens    MensagemWhatsapp[]
+
+  @@index([clinica_id])
+  @@index([clinica_id, inicio])
+  @@index([clinica_id, profissional_id, inicio])
+  @@index([clinica_id, paciente_id])
+  @@index([clinica_id, criado_em])
+  @@map("agendamentos")
+}
+
+/// Prontuário IMUTÁVEL: sem update/delete (bloqueado pela extensão tenant e por trigger no banco).
+/// Correção = novo registro, opcionalmente apontando para o corrigido em `corrige_registro_id`.
+model ProntuarioRegistro {
+  id                  String   @id @default(uuid()) @db.Uuid
+  clinica_id          String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  paciente_id         String   @db.Uuid
+  profissional_id     String?  @db.Uuid
+  agendamento_id      String?  @db.Uuid
+  /// Usuário que escreveu o registro.
+  autor_id            String?  @db.Uuid
+  texto               String
+  corrige_registro_id String?  @db.Uuid
+  criado_em           DateTime @default(now())
+
+  clinica      Clinica             @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  paciente     Paciente            @relation(fields: [paciente_id], references: [id], onDelete: Restrict)
+  // Restrict (e não SetNull): SetNull faria UPDATE no prontuário, bloqueado pelo trigger de imutabilidade.
+  profissional Profissional?       @relation(fields: [profissional_id], references: [id], onDelete: Restrict)
+  agendamento  Agendamento?        @relation(fields: [agendamento_id], references: [id], onDelete: Restrict)
+  autor        Usuario?            @relation("RegistroAutor", fields: [autor_id], references: [id], onDelete: Restrict)
+  corrige      ProntuarioRegistro? @relation("Correcao", fields: [corrige_registro_id], references: [id], onDelete: Restrict)
+  correcoes    ProntuarioRegistro[] @relation("Correcao")
+  anexos       Anexo[]
+
+  @@index([clinica_id])
+  @@index([clinica_id, paciente_id, criado_em])
+  @@map("prontuario_registros")
+}
+
+model Anexo {
+  id           String   @id @default(uuid()) @db.Uuid
+  clinica_id   String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  paciente_id  String   @db.Uuid
+  registro_id  String?  @db.Uuid
+  nome_arquivo String
+  /// Caminho relativo a UPLOAD_DIR.
+  caminho      String
+  mime_tipo    String?
+  /// Tamanho em bytes.
+  tamanho      Int
+  enviado_por  String?  @db.Uuid
+  criado_em    DateTime @default(now())
+
+  clinica  Clinica             @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  paciente Paciente            @relation(fields: [paciente_id], references: [id], onDelete: Restrict)
+  registro ProntuarioRegistro? @relation(fields: [registro_id], references: [id], onDelete: SetNull)
+  usuario  Usuario?            @relation("AnexoEnviadoPor", fields: [enviado_por], references: [id], onDelete: SetNull)
+
+  @@index([clinica_id])
+  @@index([clinica_id, paciente_id])
+  @@index([clinica_id, criado_em])
+  @@map("anexos")
+}
+
+/// Uma sessão WPPConnect por clínica.
+model WhatsappSessao {
+  id            String               @id @default(uuid()) @db.Uuid
+  clinica_id    String               @unique @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  nome_sessao   String               @unique
+  /// Token Bearer gerado pelo WPPConnect para a sessão.
+  token         String?
+  status        StatusSessaoWhatsapp @default(desconectada)
+  telefone      String?
+  criado_em     DateTime             @default(now())
+  atualizado_em DateTime             @updatedAt
+
+  clinica Clinica @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+
+  @@map("whatsapp_sessoes")
+}
+
+model MensagemWhatsapp {
+  id             String          @id @default(uuid()) @db.Uuid
+  clinica_id     String          @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  agendamento_id String?         @db.Uuid
+  paciente_id    String?         @db.Uuid
+  telefone       String
+  /// Nulo para mensagens de entrada.
+  tipo           TipoMensagem?
+  direcao        DirecaoMensagem
+  conteudo       String
+  status         StatusMensagem  @default(pendente)
+  erro           String?
+  /// ID da mensagem no provedor (WPPConnect / Meta).
+  id_externo     String?
+  enviada_em     DateTime?
+  criado_em      DateTime        @default(now())
+
+  clinica     Clinica      @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  agendamento Agendamento? @relation(fields: [agendamento_id], references: [id], onDelete: SetNull)
+  paciente    Paciente?    @relation(fields: [paciente_id], references: [id], onDelete: SetNull)
+
+  @@index([clinica_id])
+  @@index([clinica_id, criado_em])
+  @@index([clinica_id, direcao, status])
+  @@index([clinica_id, telefone])
+  @@map("mensagens_whatsapp")
+}
+
+/// Log de acesso (LGPD). Gravado via logAcesso() em src/utils/logAcesso.ts.
+model LogAcesso {
+  id          String   @id @default(uuid()) @db.Uuid
+  clinica_id  String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  usuario_id  String?  @db.Uuid
+  acao        String
+  entidade    String
+  entidade_id String?
+  ip          String?
+  user_agent  String?
+  criado_em   DateTime @default(now())
+
+  clinica Clinica  @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  usuario Usuario? @relation(fields: [usuario_id], references: [id], onDelete: SetNull)
+
+  @@index([clinica_id, criado_em])
+  @@index([clinica_id, entidade, entidade_id])
+  @@map("logs_acesso")
+}

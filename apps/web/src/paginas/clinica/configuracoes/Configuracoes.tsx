@@ -1,0 +1,99 @@
+// Configurações da clínica: dados da clínica e plano/uso dos recursos (somente leitura por enquanto).
+// TODO(fase 2): edição dos dados da clínica (request.db.clinica.update permite a própria clínica).
+import { useMe } from '@/api/me';
+import { ROTULOS_STATUS_ASSINATURA } from '@/api/tipos';
+import { CabecalhoPagina, Carregando } from '@/componentes/comum';
+import { Badge } from '@/componentes/ui/badge';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/componentes/ui/card';
+import { formatarData, formatarMoeda, mascararCpfCnpj, mascararTelefone } from '@/lib/formatos';
+import { cn } from '@/lib/utils';
+
+export default function PaginaConfiguracoes() {
+  const { data: me } = useMe();
+  if (!me) return <Carregando />;
+  const { clinica, plano, assinatura, recursos } = me;
+  const lista = Object.entries(recursos);
+
+  return (
+    <div>
+      <CabecalhoPagina titulo="Configurações" descricao="Dados da clínica, plano contratado e uso dos recursos." />
+      <div className="grid gap-6 lg:grid-cols-5">
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Clínica</CardTitle>
+            <CardDescription>Dados cadastrais</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <dl className="space-y-3 text-sm">
+              {[
+                ['Nome', clinica.nome],
+                ['CNPJ/CPF', mascararCpfCnpj(clinica.documento)],
+                ['Responsável', clinica.responsavel ?? '—'],
+                ['E-mail', clinica.email ?? '—'],
+                ['Telefone', clinica.telefone ? mascararTelefone(clinica.telefone) : '—'],
+              ].map(([rotulo, valor]) => (
+                <div key={rotulo} className="grid grid-cols-3 gap-2">
+                  <dt className="text-muted-foreground">{rotulo}</dt>
+                  <dd className="col-span-2 break-words">{valor}</dd>
+                </div>
+              ))}
+            </dl>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-3">
+          <CardHeader>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <CardTitle>Plano {plano?.nome}</CardTitle>
+                <CardDescription>
+                  {plano && Number(plano.preco) > 0 ? `${formatarMoeda(plano.preco)} por mês` : 'Gratuito'}
+                  {assinatura?.expira_em && ` · expira em ${formatarData(assinatura.expira_em)}`}
+                </CardDescription>
+              </div>
+              {assinatura?.status && (
+                <Badge variant={assinatura.somente_leitura ? 'destructive' : 'secondary'}>
+                  {ROTULOS_STATUS_ASSINATURA[assinatura.status]}
+                </Badge>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent>
+            <ul className="divide-y">
+              {lista.map(([codigo, r]) => {
+                const pct = r.limite ? Math.min(100, Math.round(((r.uso ?? 0) / r.limite) * 100)) : 0;
+                return (
+                  <li key={codigo} className="py-3">
+                    <div className="flex items-center justify-between gap-2 text-sm">
+                      <span className={cn(!r.habilitado && 'text-muted-foreground')}>{r.nome}</span>
+                      <span className="text-muted-foreground">
+                        {!r.habilitado
+                          ? 'Não incluso'
+                          : r.tipo === 'booleano'
+                            ? 'Incluso'
+                            : r.limite === null
+                              ? `${r.uso} · ilimitado`
+                              : `${r.uso} de ${r.limite}${r.periodo === 'mensal' ? ' este mês' : ''}`}
+                      </span>
+                    </div>
+                    {r.habilitado && r.tipo === 'limite' && r.limite !== null && (
+                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={cn('h-full rounded-full', pct >= 100 ? 'bg-destructive' : 'bg-primary')}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+            <p className="mt-4 text-xs text-muted-foreground">
+              Precisa de mais? Fale com o suporte para fazer upgrade do seu plano.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}

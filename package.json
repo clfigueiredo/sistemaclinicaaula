@@ -1,0 +1,30 @@
+{
+  "name": "sistema-clinica",
+  "private": true,
+  "version": "0.1.0",
+  "description": "SaaS multi-tenant de gestão de clínicas",
+  "//": "Monorepo SEM npm workspaces: o disco de rede (SMB) não permite symlinks, que o npm exige para workspaces. Cada app tem o próprio node_modules; os scripts abaixo orquestram via --prefix.",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "postinstall": "npm install --prefix apps/api --no-audit --no-fund && npm install --prefix apps/web --no-audit --no-fund",
+    "dev": "concurrently -k -n api,web -c blue,green \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run dev --prefix apps/api",
+    "dev:web": "npm run dev --prefix apps/web",
+    "dev:worker": "npm run dev:worker --prefix apps/api",
+    "build": "npm run build --prefix apps/api && npm run build --prefix apps/web",
+    "typecheck": "npm run typecheck --prefix apps/api && npm run typecheck --prefix apps/web",
+    "test": "npm run test --prefix apps/api",
+    "db:migrate": "npm run db:migrate --prefix apps/api",
+    "db:deploy": "npm run db:deploy --prefix apps/api",
+    "db:seed": "npm run db:seed --prefix apps/api",
+    "db:studio": "npm run db:studio --prefix apps/api",
+    "db:generate": "npm run db:generate --prefix apps/api",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
