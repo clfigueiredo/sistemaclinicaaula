@@ -88,7 +88,7 @@ Sistema_Clinica/
 - Entidade genérica **`profissionais`** (médico é um profissional; campo `registro` serve para CRM/CRO/CRP…).
 - **Convênio:** apenas seleção do nome (lista por clínica); sem faturamento TISS. Agendamento é `particular` ou `convenio`.
 - **Auto-cadastro** público cria clínica + usuário admin + assinatura no plano marcado como `plano_cadastro`.
-- **Teste grátis:** todas as funções, tudo limitado a **1** (profissional, recepcionista, agendamento, anexo, mensagem WhatsApp); limites **totais**, **sem prazo** de expiração.
+- **Teste grátis:** todas as funções, limitado a **1** profissional, recepcionista, agendamento e anexo, e **3** mensagens WhatsApp (lembrete + confirmação/cancelamento cabem no teste); limites **totais**, **sem prazo** de expiração.
 - **Limite de equipe** (`max_recepcionistas`, "usuários de equipe"): recepções ativas + admins ativos
   **adicionais**. Só o **admin principal** (o admin ativo mais antigo — o do auto-cadastro) não conta.
   Admin pode estar vinculado a um profissional.

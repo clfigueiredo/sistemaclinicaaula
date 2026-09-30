@@ -68,7 +68,7 @@ Plano de teste grátis — **sem prazo de expiração**, limites **totais**:
 | max_agendamentos | 1 | total |
 | max_anexos | 1 | total |
 | whatsapp | sim | — |
-| max_mensagens | 1 | total |
+| max_mensagens | 3 | total |
 
 Planos pagos normalmente usam `mensal` para agendamentos e mensagens.
 

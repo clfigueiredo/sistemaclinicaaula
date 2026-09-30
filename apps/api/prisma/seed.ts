@@ -34,7 +34,7 @@ const RECURSOS_TESTE: Record<CodigoRecurso, ConfigRecurso> = {
   max_agendamentos: { habilitado: true, limite: 1, periodo: 'total' },
   max_anexos: { habilitado: true, limite: 1, periodo: 'total' },
   whatsapp: { habilitado: true, limite: null, periodo: 'total' },
-  max_mensagens: { habilitado: true, limite: 1, periodo: 'total' },
+  max_mensagens: { habilitado: true, limite: 3, periodo: 'total' },
   financeiro: { habilitado: false, limite: null, periodo: 'total' },
   agendamento_online: { habilitado: false, limite: null, periodo: 'total' },
 };
