@@ -307,7 +307,7 @@ function ConteudoDashboard({ d }: { d: DashboardClinica }) {
         )}
       </section>
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>Agendamentos no período</CardTitle>
@@ -328,7 +328,7 @@ function ConteudoDashboard({ d }: { d: DashboardClinica }) {
         </Card>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>Ocupação por profissional</CardTitle>
@@ -458,7 +458,7 @@ function BlocoFinanceiro({ f, filtrado }: { f: NonNullable<DashboardClinica['fin
           />
         </dl>
 
-        <div className="grid gap-6 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div>
             <p className="mb-3 text-sm font-medium">Contas (hoje e próximos 7 dias)</p>
             <ul className="divide-y rounded-md border text-sm">

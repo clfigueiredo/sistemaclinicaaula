@@ -164,8 +164,17 @@ export function useAlterarSituacaoClinica(id: string) {
 
 export function useAlterarAssinatura(id: string) {
   const apos = useAposAlterarClinica();
+  const qc = useQueryClient();
   return useMutation({
-    mutationFn: (dados: DadosAssinatura) => api.put<DetalheClinicaAdmin>(`/admin/clinicas/${id}/assinatura`, dados),
-    onSuccess: apos,
+    mutationFn: (dados: DadosAssinatura) =>
+      api.put<DetalheClinicaAdmin & { cobranca_automatica?: { ativada: boolean; mensagem: string } | null }>(
+        `/admin/clinicas/${id}/assinatura`,
+        dados,
+      ),
+    onSuccess: (dados) => {
+      apos(dados);
+      // Trocar para plano pago pode ligar a cobrança automática (bloco de cobrança do detalhe).
+      qc.invalidateQueries({ queryKey: ['admin', 'cobranca'] });
+    },
   });
 }

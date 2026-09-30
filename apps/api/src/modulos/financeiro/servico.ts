@@ -14,7 +14,6 @@ import {
   moedaOuNull,
   paraDataIso,
   primeiroDiaMes,
-  separarObservacoes,
   somarMeses,
 } from './comum';
 
@@ -104,7 +103,6 @@ export function statusExibicao(t: { status: string; vencimento: Date }, hoje: st
 }
 
 export function serializarTitulo(t: TituloCompleto, hoje: string) {
-  const { observacoes, agendamento_id } = separarObservacoes(t.observacoes);
   const baixa = t.movimentacoes.find((m) => m.origem === 'titulo' && !m.estornada_por);
   return {
     id: t.id,
@@ -124,8 +122,8 @@ export function serializarTitulo(t: TituloCompleto, hoje: string) {
     grupo_parcelas_id: t.grupo_parcelas_id,
     recorrencia_id: t.recorrencia_id,
     competencia: t.competencia ? paraDataIso(t.competencia) : null,
-    observacoes,
-    agendamento_id,
+    observacoes: t.observacoes,
+    agendamento_id: t.agendamento_id,
     pago_em: t.pago_em,
     valor_pago: moedaOuNull(t.valor_pago),
     cancelado_em: t.cancelado_em,

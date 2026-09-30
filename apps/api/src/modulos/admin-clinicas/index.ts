@@ -10,7 +10,11 @@
  *   PATCH /admin/clinicas/:id               { status: 'ativa' | 'inativa' } — ativa/desativa a clínica
  *   PUT   /admin/clinicas/:id/assinatura    { plano_id?, status?, expira_em? (ISO | null) } — troca plano/status/expiração.
  *                                           Sem assinatura → cria (plano_id obrigatório). Saindo de `teste` para plano
- *                                           pago sem status explícito → `ativa`.
+ *                                           pago sem status explícito → `ativa`. Plano PAGO atribuído com gateway de
+ *                                           cobrança ativo ⇒ liga a cobrança automática (admin-cobranca:
+ *                                           ativarCobrancaAutomatica; dia = o da assinatura ou o padrão do gateway).
+ *                                           Resposta = detalhe + `cobranca_automatica: null | { ativada, mensagem }`
+ *                                           (falha no gateway não desfaz a troca de plano).
  *
  * - Prisma CRU (plataforma). Uso dos recursos via obterUsoERecursos (mesma regra do /me).
  * - Nada é gravado em logs_acesso (é plataforma); as ações são registradas via request.log.
@@ -21,6 +25,8 @@ import { z } from 'zod';
 import { prisma } from '../../lib/prisma';
 import { autenticarAdmin } from '../../plugins/auth';
 import { ErroNegocio, ou404 } from '../../utils/erros';
+import { provedorAtivo } from '../../servicos/pagamentos';
+import { ativarCobrancaAutomatica } from '../admin-cobranca/servico';
 import { listarClinicas, montarDashboard, obterDetalheClinica, STATUS_ASSINATURA } from './servico';
 
 export const prefixo = '/admin';
@@ -83,7 +89,7 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
     const { id } = request.params;
     const { plano_id, status, expira_em } = request.body;
 
-    await prisma.$transaction(async (tx) => {
+    const planoPagoAtribuido = await prisma.$transaction(async (tx) => {
       const clinica = ou404(
         await tx.clinica.findUnique({ where: { id }, include: { assinatura: true } }),
         'Clínica não encontrada.',
@@ -111,7 +117,7 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
             expira_em: expira_em ?? null,
           },
         });
-        return;
+        return novoPlano.preco.toNumber() > 0;
       }
 
       let statusFinal = status;
@@ -127,14 +133,48 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
           ...(expira_em !== undefined && { expira_em }),
         },
       });
+      return !!novoPlano && novoPlano.preco.toNumber() > 0;
     });
 
     request.log.info(
       { clinicaId: id, plano_id, status, expira_em, admin: request.adminPlataforma?.id },
       'Assinatura da clínica alterada pelo super admin',
     );
-    return obterDetalheClinica(id);
+    const cobranca_automatica = planoPagoAtribuido ? await ligarCobrancaAutomatica(id, request.log) : null;
+    return { ...(await obterDetalheClinica(id)), cobranca_automatica };
   });
 };
+
+/**
+ * Plano pago atribuído: liga a cobrança automática no gateway ativo (se houver). Nunca lança — sem gateway
+ * ativo devolve null; falha no gateway vira `{ ativada: false, mensagem }` (o plano já foi trocado).
+ */
+async function ligarCobrancaAutomatica(
+  clinicaId: string,
+  log: { info: (o: object, m: string) => void; warn: (o: object, m: string) => void },
+): Promise<{ ativada: boolean; mensagem: string } | null> {
+  const provedor = await provedorAtivo();
+  if (!provedor) return null;
+  const [assinatura, gateway] = await Promise.all([
+    prisma.assinatura.findUnique({ where: { clinica_id: clinicaId }, select: { status: true, dia_vencimento: true } }),
+    prisma.gatewayPagamento.findUnique({ where: { provedor }, select: { dia_vencimento_padrao: true } }),
+  ]);
+  if (!assinatura || assinatura.status === 'cancelada' || assinatura.status === 'bloqueada') return null;
+  const diaVencimento = assinatura.dia_vencimento ?? gateway?.dia_vencimento_padrao ?? 10;
+  try {
+    const r = await ativarCobrancaAutomatica({ clinicaId, diaVencimento });
+    log.info({ clinicaId, gateway: provedor, diaVencimento }, 'Cobrança automática ligada ao atribuir plano pago');
+    return {
+      ativada: true,
+      mensagem: r.cobranca
+        ? `Cobrança automática ativada (vencimento todo dia ${diaVencimento}); primeira cobrança gerada.`
+        : `Cobrança automática ativada (vencimento todo dia ${diaVencimento}).`,
+    };
+  } catch (e) {
+    const mensagem = e instanceof Error ? e.message : 'Erro desconhecido';
+    log.warn({ clinicaId, gateway: provedor, erro: mensagem }, 'Falha ao ligar a cobrança automática');
+    return { ativada: false, mensagem: `Plano alterado, mas a cobrança automática não foi ativada: ${mensagem}` };
+  }
+}
 
 export default modulo;

@@ -417,6 +417,8 @@ model Assinatura {
   assinatura_externa_id String?
   /// Dia do mês (1–28) do vencimento da mensalidade.
   dia_vencimento        Int?               @db.SmallInt
+  /// Método preferido da cobrança automática (null = o cliente escolhe no link do gateway).
+  metodo_cobranca       MetodoCobranca?
   criado_em             DateTime           @default(now())
   atualizado_em         DateTime           @updatedAt
 
@@ -448,6 +450,10 @@ model GatewayPagamento {
   /// Dias após o vencimento antes de a assinatura virar `vencida`/`bloqueada`.
   dias_tolerancia         Int               @default(5)
   metodos                 MetodoCobranca[]  @default([pix, boleto])
+  /// Dia do mês (1–28) sugerido ao ativar a cobrança recorrente de uma clínica.
+  dia_vencimento_padrao   Int               @default(10) @db.SmallInt
+  /// Modelo da descrição da cobrança: `{plano}` e `{competencia}` (MM/AAAA) são substituídos.
+  descricao_cobranca      String            @default("Mensalidade do sistema — plano {plano} ({competencia})")
   criado_em               DateTime          @default(now())
   atualizado_em           DateTime          @updatedAt
 
@@ -734,6 +740,7 @@ model Agendamento {
   registros                 ProntuarioRegistro[]
   mensagens                 MensagemWhatsapp[]
   movimentacoes_financeiras MovimentacaoFinanceira[]
+  titulos                   Titulo[]
   solicitacao_agendamento   SolicitacaoAgendamento?
   lista_espera              ListaEspera[]
   documentos_clinicos       DocumentoClinico[]
@@ -1018,6 +1025,8 @@ model Titulo {
   grupo_parcelas_id String?         @db.Uuid
   recorrencia_id    String?         @db.Uuid
   competencia       DateTime?       @db.Date
+  /// Consulta de origem (ex.: título a receber do convênio lançado pelo painel da agenda).
+  agendamento_id    String?         @db.Uuid
   observacoes       String?
   pago_em           DateTime?
   valor_pago        Decimal?        @db.Decimal(12, 2)
@@ -1031,10 +1040,12 @@ model Titulo {
   paciente      Paciente?                @relation(fields: [paciente_id], references: [id], onDelete: SetNull)
   profissional  Profissional?            @relation(fields: [profissional_id], references: [id], onDelete: SetNull)
   recorrencia   Recorrencia?             @relation(fields: [recorrencia_id], references: [id], onDelete: SetNull)
+  agendamento   Agendamento?             @relation(fields: [agendamento_id], references: [id], onDelete: SetNull)
   movimentacoes MovimentacaoFinanceira[]
 
   @@unique([recorrencia_id, competencia])
   @@index([clinica_id])
+  @@index([clinica_id, agendamento_id])
   @@index([clinica_id, tipo, status, vencimento])
   @@index([clinica_id, grupo_parcelas_id])
   @@map("titulos")

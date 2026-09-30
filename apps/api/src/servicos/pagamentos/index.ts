@@ -66,24 +66,24 @@ export function credencialPrincipal(c: Partial<CredenciaisArmazenadas> | null | 
   return typeof v === 'string' && v.trim() ? v : null;
 }
 
-/** Separa credenciais e opções do JSON cifrado (tolerante a registros antigos sem `opcoes`). */
-export function separarArmazenado(json: CredenciaisArmazenadas | null): {
-  credenciais: CredenciaisGateway | null;
-  opcoes: OpcoesGateway;
-} {
-  if (!json) return { credenciais: null, opcoes: { ...OPCOES_GATEWAY_PADRAO } };
-  const { opcoes, ...credenciais } = json;
-  return {
-    credenciais: credencialPrincipal(json) ? (credenciais as CredenciaisGateway) : null,
-    opcoes: { ...OPCOES_GATEWAY_PADRAO, ...(opcoes ?? {}) },
-  };
+/** Credenciais do JSON cifrado (descarta o campo legado `opcoes`, que virou coluna). */
+export function separarArmazenado(json: CredenciaisArmazenadas | null): { credenciais: CredenciaisGateway | null } {
+  if (!json) return { credenciais: null };
+  const { opcoes: _legado, ...credenciais } = json;
+  return { credenciais: credencialPrincipal(json) ? (credenciais as CredenciaisGateway) : null };
+}
+
+/** Opções gerais do gateway a partir das colunas (padrões se não houver registro). */
+export function opcoesDoRegistro(g: { dia_vencimento_padrao: number; descricao_cobranca: string } | null | undefined): OpcoesGateway {
+  if (!g) return { ...OPCOES_GATEWAY_PADRAO };
+  return { dia_vencimento_padrao: g.dia_vencimento_padrao, descricao_cobranca: g.descricao_cobranca };
 }
 
 /** Monta a configuração decifrada de um provedor (null se não cadastrado ou sem credenciais). */
 export async function carregarConfigGateway(provedor: ProvedorPagamento): Promise<ConfigGateway | null> {
   const g = await prisma.gatewayPagamento.findUnique({ where: { provedor } });
   if (!g || !g.credenciais_cifradas) return null;
-  const { credenciais, opcoes } = separarArmazenado(descriptografarJson<CredenciaisArmazenadas>(g.credenciais_cifradas));
+  const { credenciais } = separarArmazenado(descriptografarJson<CredenciaisArmazenadas>(g.credenciais_cifradas));
   if (!credenciais) return null;
   return {
     provedor: g.provedor,
@@ -92,7 +92,7 @@ export async function carregarConfigGateway(provedor: ProvedorPagamento): Promis
     segredoWebhook: g.segredo_webhook_cifrado ? descriptografar(g.segredo_webhook_cifrado) : null,
     metodos: g.metodos,
     diasTolerancia: g.dias_tolerancia,
-    opcoes,
+    opcoes: opcoesDoRegistro(g),
   };
 }
 

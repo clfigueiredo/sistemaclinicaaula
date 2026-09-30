@@ -1,10 +1,14 @@
 # Fase 2 do produto — contratos por módulo
 
-> Fundação entregue em 30/09/2026 (migration `20261001000000_fase2_produto`). Este documento é o
-> **contrato** entre os módulos da fase 2, que são implementados em paralelo. Leia também `CLAUDE.md`
-> (regras e convenções) e `docs/ARQUITETURA.md` §7 (modelo de dados).
+> Fundação entregue em 30/09/2026 (migration `20261001000000_fase2_produto`); módulos implementados em paralelo
+> e integrados em seguida (migration `20261002000000_ajustes_fase2`). Este documento é o **contrato** entre os
+> módulos da fase 2 e registra também o que foi acrescentado na implementação (parágrafos "Adições"). Leia também
+> `CLAUDE.md` (regras e convenções) e `docs/ARQUITETURA.md` §7 (modelo de dados).
 
 ## 0. Regras para quem implementa um módulo
+
+> O congelamento abaixo valeu durante a implementação paralela. Depois da integração, mudanças em arquivos
+> compartilhados seguem a regra normal do `CLAUDE.md` (rodar a suíte inteira).
 
 **Arquivos compartilhados são CONGELADOS** (não edite; se faltar algo, registre no relatório):
 `apps/api/prisma/schema.prisma`, `prisma/migrations/*`, `prisma/seed.ts`, `src/plugins/*`,
@@ -50,6 +54,9 @@ Padrões obrigatórios (resumo do `CLAUDE.md`):
 | Cobranças do SaaS | `cobrancas` é de plataforma mas tem `clinica_id`: via `request.db` é **somente leitura e filtrada** pela clínica (a clínica vê as próprias faturas). `gateways_pagamento`/`eventos_gateway` são proibidos via `request.db`. Só um gateway ativo (índice parcial). |
 | FKs "Restrict" novas | Usam `NoAction` (checado no fim do comando) para a exclusão em cascata da clínica funcionar. |
 | Usuário criador | `criado_por`/`analisado_por` sem FK (auditoria), exceto `movimentacoes.criado_por` e `documentos.autor_id` (com FK). |
+| Título ↔ consulta (`ajustes_fase2`) | Coluna `titulos.agendamento_id` (FK opcional, `SET NULL`, índice `(clinica_id, agendamento_id)`). Substituiu o marcador `[agendamento:<id>]` que o financeiro gravava em `observacoes` (dados migrados no SQL da migration). A baixa do título copia o `agendamento_id` para a movimentação. |
+| Opções do gateway (`ajustes_fase2`) | Colunas `gateways_pagamento.dia_vencimento_padrao` (1–28, padrão 10, CHECK) e `descricao_cobranca` (modelo com `{plano}`/`{competencia}`). O JSON cifrado guarda **só** credenciais (o campo legado `opcoes` é ignorado). |
+| Método da cobrança automática (`ajustes_fase2`) | `assinaturas.metodo_cobranca` (nullable): método preferido gravado ao ligar a cobrança automática e usado pelo worker (se ainda habilitado no gateway; senão o cliente escolhe no link). |
 
 ### Recursos do plano (catálogo)
 
@@ -114,6 +121,24 @@ Repasse: `total_entradas` = Σ entradas **efetivas** com `profissional_id` no pe
 `total_entradas × percentual / 100`; `pago` = Σ saídas efetivas `origem = repasse` do profissional com
 período de referência contido no filtro.
 
+**Adições da implementação:**
+
+| Método e rota | Papéis | Observação |
+|---|---|---|
+| `PUT /financeiro/movimentacoes/:id` | admin | só `descricao`/`categoria_id` (valor, tipo, data e conta são imutáveis) |
+| `POST /financeiro/recebimentos/convenio` | admin, recepção | `{ agendamento_id, valor, vencimento, categoria_id?, descricao?, observacoes? }` — consulta de convênio ⇒ título **a receber** (fornecedor = convênio, `titulos.agendamento_id`). 409 `agendamento_particular` |
+| `GET /financeiro/recebimentos/agendamento/:id` | admin, recepção | também devolve `titulos` (a receber do convênio da consulta) |
+| `GET /financeiro/titulos/:id` | admin, recepção | detalhe |
+| `GET /financeiro/titulos` | admin, recepção | `status` aceita também `a_vencer`; resposta com `totais { a_vencer, vencidos, pagos_periodo }` |
+| `POST /financeiro/titulos/:id/baixa` | admin, recepção | aceita `juros`, `desconto`, `descricao` (valor pago = valor + juros − desconto, ou `valor_pago`) |
+| `GET /financeiro/repasses/entradas` | admin; profissional (forçado) | entradas que compõem o repasse (`inicio, fim, profissional_id?`) |
+| `GET /financeiro/relatorios/exportar` | admin | CSV: `tipo=movimentacoes\|categorias\|formas\|profissionais\|fluxo\|repasses&inicio&fim` |
+| `GET /financeiro/relatorios/fluxo-caixa` | admin | aceita `agrupamento=dia\|mes`; resposta com `saldo_final` |
+
+Decisões: data futura em lançamento/recebimento/baixa ⇒ 400 `data_futura` (futuro é título); conta desativada ⇒
+409 `conta_inativa`; categoria incompatível ⇒ 400 `categoria_incompativel`; estorno tem data = hoje e copia os
+vínculos; totais de `/movimentacoes` são efetivos; pagamento de repasse acima do saldo é permitido (adiantamento).
+
 **Chaves TanStack:** `chavesFinanceiro.*` (raiz `['financeiro']`). Registrar recebimento não consome limite.
 
 **Integrações:** agenda (`RecebimentoConsulta` no painel); dashboard lê `movimentacoes_financeiras`/`titulos`
@@ -139,7 +164,7 @@ serviços de `modulos/agendamentos/servico.ts` (`calcularDisponibilidade`, `trav
 
 | Rota | Acesso | Body / query | Resposta |
 |---|---|---|---|
-| `GET /publico/clinicas/:slug` | público (rate limit 60/min/IP) | — | `{ clinica: { nome, slug, telefone, endereco, cidade, uf, fuso_horario }, mensagem_boas_vindas, antecedencia_min_horas, dias_a_frente, profissionais: [{ id, nome, especialidade, duracao_consulta_min }] }` |
+| `GET /publico/clinicas/:slug` | público (rate limit 60/min/IP) | — | `{ clinica: { nome, slug, telefone, endereco, cidade, uf, fuso_horario }, mensagem_boas_vindas, antecedencia_min_horas, dias_a_frente, hoje ('YYYY-MM-DD' no fuso da clínica), profissionais: [{ id, nome, especialidade, duracao_consulta_min }] }` |
 | `GET /publico/clinicas/:slug/disponibilidade` | público (60/min) | `profissional_id, data (YYYY-MM-DD)` | `{ data, fuso, horarios: [{ inicio, fim, hora }] }` — sem horários antes de `agora + antecedência`, nem além de `dias_a_frente`, nem com solicitação pendente no mesmo horário |
 | `POST /publico/clinicas/:slug/solicitacoes` | público (5/min/IP) | `{ profissional_id, inicio, nome, telefone, email?, cpf?, nascimento?, observacoes?, aceita_whatsapp, website? }` | 201 `{ id, status: 'pendente', inicio, fim, profissional: { nome } }`. Honeypot `website` preenchido ⇒ 201 falso (nada gravado). 409 `horario_indisponivel`; 409 `limite_solicitacoes` (pendentes por telefone) |
 | `GET /solicitacoes` | admin, recepção | `status?, pagina, por_pagina` | `Paginado<Solicitacao>` (+ profissional) |
@@ -155,6 +180,10 @@ Aprovação (uma transação): `assegurarLimite(clinicaId, 'max_agendamentos', {
 (`criado_por` = usuário que aprovou) → solicitação `aprovada` (+ `paciente_id`, `agendamento_id`,
 `analisado_por/em`). Depois do commit: `enfileirarMensagem({ tipo: 'agendamento_confirmado', pacienteId,
 agendamentoId, conteudo: textoAgendamentoOnlineConfirmado(...) })`.
+Depois do commit da aprovação também roda `vincularRetornoAoNovoAgendamento` (módulo retornos, §5): retorno em
+aberto do mesmo paciente+profissional dentro da janela vira `agendado`.
+Aprovação sem `paciente_id`: paciente com o **mesmo CPF** é reaproveitado; casamento por telefone é só sugestão.
+`GET /solicitacoes/resumo` conta só pendentes com horário futuro.
 Recusa: `enfileirarMensagem({ tipo: 'agendamento_recusado', pacienteId: null, telefone,
 consentimentoExterno: solicitacao.aceita_whatsapp, conteudo: textoAgendamentoOnlineRecusado({ ...,
 linkAgendamento: `${env.WEB_URL_PUBLICA}/agendar/${slug}` }) })`.
@@ -173,11 +202,11 @@ Aprovar invalida também `chavesMe.me` e `['agendamentos']`.
 
 | Rota | Body / query | Resposta |
 |---|---|---|
-| `GET /lista-espera` | `status? (padrão aguardando), profissional_id?, pagina, por_pagina` | `Paginado<Item>` com `paciente { id, nome, telefone, whatsapp, aceita_whatsapp }`, `profissional { id, nome } \| null` |
-| `POST /lista-espera` | `{ paciente_id, profissional_id?, dias_semana?, turnos?, observacao? }` | 201 item |
+| `GET /lista-espera` | `status? (padrão aguardando; todos = sem filtro), profissional_id?, paciente_id?, pagina, por_pagina` | `Paginado<Item>` com `paciente { id, nome, telefone, whatsapp, aceita_whatsapp }`, `profissional { id, nome } \| null` |
+| `POST /lista-espera` | `{ paciente_id, profissional_id?, dias_semana?, turnos?, observacao? }` | 201 item. 409 `ja_na_lista` se o paciente já aguarda o mesmo profissional (ou "qualquer") |
 | `PUT /lista-espera/:id` | idem (parcial) | item |
 | `PATCH /lista-espera/:id/status` | `{ status, agendamento_id? }` | item |
-| `GET /lista-espera/sugestoes?agendamento_id` | agendamento `cancelado`/`faltou` | `{ agendamento: { id, inicio, fim, profissional }, horario_livre: boolean, sugestoes: Item[] }` |
+| `GET /lista-espera/sugestoes?agendamento_id` **ou** `?profissional_id&inicio[&fim]` | agendamento `cancelado`/`faltou` (senão 409 `agendamento_ativo`) ou um horário qualquer | `{ agendamento: { id \| null, inicio, fim, profissional }, horario_livre: boolean, sugestoes: Item[] }` (o paciente do próprio agendamento cancelado não é sugerido) |
 | `GET /lista-espera/vagas-recentes` | — | `{ total, itens: [{ agendamento_id, inicio, profissional: { id, nome }, sugestoes: number }] }` (cancelados nos últimos 7 dias, início futuro, horário ainda livre, com ≥ 1 sugestão) |
 | `POST /lista-espera/:id/oferecer` | `{ agendamento_id }` | `{ whatsapp: { enfileirada, erro? } }` + `ultima_oferta_em` |
 
@@ -202,11 +231,13 @@ agenda (cancelado/faltou) e `AvisoTopoListaEspera` no topo. **Chaves:** `chavesL
 |---|---|---|
 | `GET /documentos/pacientes/:pacienteId` | — | `[{ id, tipo, titulo, criado_em, profissional: { id, nome, registro }, autor: { id, nome }, agendamento_id }]` (log `listar`) |
 | `GET /documentos/:id` | — | documento completo (log `visualizar`) |
-| `POST /documentos` | `{ paciente_id, tipo, conteudo (1–20000), titulo?, agendamento_id?, metadados? }` | 201 documento (log `criar`). `profissional_id = profissionalAutor(request)` |
+| `POST /documentos` | `{ paciente_id, tipo, conteudo? (≤ 20000), titulo?, agendamento_id?, metadados? }` | 201 documento (log `criar`). `profissional_id = profissionalAutor(request)`. Conteúdo vazio ⇒ montado dos metadados (itens da receita, exames) ou do modelo padrão (atestado, declaração); 400 `conteudo_vazio` se não der |
+| `POST /documentos/previa` | mesmo corpo do `POST /documentos` | `application/pdf` de pré-visualização — **nada é gravado** (mesmas validações e regras de acesso) |
 | `GET /documentos/:id/pdf` | — | `application/pdf` inline, `Content-Disposition: inline; filename="<tipo>-<data>.pdf"` (log `baixar`) |
 
-`metadados` sugeridos: atestado `{ dias?, cid?, exibir_cid? }`; pedido de exame `{ exames: string[] }`;
-receita `{ uso?: 'interno'|'externo' }`. PDF (pdfkit, A4): cabeçalho da clínica (nome, CNPJ/CPF, endereço,
+`metadados` sugeridos: atestado `{ dias?, cid?, exibir_cid? }` (CID só é gravado com `exibir_cid = true`);
+pedido de exame `{ exames: string[] }`; receita `{ uso?: 'interno'|'externo', itens?: [...] }`. Admin sem vínculo
+a profissional ativo lê, mas não emite (403 `sem_profissional_vinculado`); `agendamento_id` precisa ser do paciente. PDF (pdfkit, A4): cabeçalho da clínica (nome, CNPJ/CPF, endereço,
 telefone), título do tipo, paciente, corpo, cidade/data por extenso (fuso da clínica), assinatura com nome +
 registro do profissional, rodapé com o id do documento. Entidade do log: `'documento_clinico'`.
 **Chaves:** `chavesDocumentos.*`.
@@ -222,16 +253,25 @@ registro do profissional, rodapé com o id do documento. Entidade do log: `'docu
 
 | Rota | Body / query | Resposta |
 |---|---|---|
-| `GET /retornos` | `status?, inicio?, fim? (data_prevista), profissional_id?, pagina, por_pagina` | `Paginado<Retorno>` com paciente, profissional, `agendamento_origem { id, inicio }`, `agendamento_retorno` |
+| `GET /retornos` | `status? (pendente\|lembrado\|agendado\|cancelado\|abertos\|vencidos), inicio?, fim? (data_prevista), profissional_id?, paciente_id?, pagina, por_pagina` | `Paginado<Retorno>` com paciente, profissional, `agendamento_origem { id, inicio, status }`, `agendamento_retorno` e `vencido` (aberto com data prevista < hoje). `abertos` = pendente + lembrado |
 | `GET /retornos/agendamento/:agendamentoId` | — | `Retorno \| null` |
 | `POST /retornos` | `{ agendamento_origem_id, dias? (1–730) \| data_prevista?, observacao? }` | 201. 409 `status_invalido` (origem ≠ compareceu/atendido), 409 `retorno_existente` |
-| `PUT /retornos/:id` | `{ data_prevista?, observacao? }` | retorno (só pendente/lembrado) |
-| `PATCH /retornos/:id/status` | `{ status: 'agendado'\|'cancelado', agendamento_retorno_id? }` | retorno |
+| `PUT /retornos/:id` | `{ dias? \| data_prevista?, observacao? }` | retorno (só pendente/lembrado; mudar a data zera o convite e volta a `pendente`) |
+| `PATCH /retornos/:id/status` | `{ status: 'agendado'\|'cancelado'\|'pendente', agendamento_retorno_id? }` | retorno. `agendado` exige agendamento do mesmo paciente, não cancelado, posterior à origem; `pendente` reabre (remove o vínculo) |
 | `POST /retornos/:id/convidar` | — | `{ whatsapp }` + `convite_enviado_em`, status `lembrado` |
 | `GET/PUT /retornos/configuracao` | `{ convite_ativo?, dias_antecedencia? (0–60) }` | `{ convite_ativo, dias_antecedencia }` |
 
+Status: `pendente` (aguardando) → `lembrado` (convite enviado) → `agendado`/`cancelado`. Profissional só atua na
+própria agenda (403 `retorno_de_outro_profissional`).
+
+**Vínculo na hora:** ao criar um agendamento (`POST /agendamentos` — a resposta traz `retorno_vinculado_id` — e
+na aprovação do agendamento online), `vincularRetornoAoNovoAgendamento` (`modulos/retornos/servico.ts`) marca como
+`agendado` o retorno em aberto mais antigo do mesmo paciente+profissional cuja janela contém o novo agendamento
+(mesma regra do job: início depois da consulta de origem e antes de `data_prevista + 90 dias`). Só com o recurso
+`retorno_automatico`; nunca faz a criação do agendamento falhar.
+
 Job diário (`processarRetornos`): reconcilia `agendado` (agendamento posterior, não cancelado, mesmo
-paciente+profissional) e envia convites (`tipo: 'convite_retorno'`, `textoConviteRetorno`, link do
+paciente+profissional, até 90 dias após a data prevista; agendamento cancelado/falta ⇒ volta a `pendente`/`lembrado`) e envia convites (`tipo: 'convite_retorno'`, `textoConviteRetorno`, link do
 agendamento online se a clínica tiver slug + `ao_ativo` + recurso). **Chaves:** `chavesRetornos.*`.
 
 ---
@@ -263,6 +303,15 @@ Agendamentos contam pelo `inicio` no período (fuso da clínica). `financeiro` s
 `financeiro` (valores efetivos — `WHERE_MOVIMENTACAO_EFETIVA`). Cada item de `pendencias` é `null` se o
 recurso correspondente estiver desligado. **Chaves:** `chavesDashboard.*`.
 
+**Adições da implementação** (a resposta é um superconjunto do JSON acima): `periodo { dias, hoje }`,
+`periodo_anterior`, `escopo { papel, profissional_id, profissional_forcado }`, `agenda.{ realizados_base,
+taxa_confirmacao, novos_pacientes }`, `agenda_anterior` (mesma duração, para comparação), `por_dia_semana[]`,
+`por_hora[]`, `hoje[]` (agenda do dia), `financeiro.{ anterior, receber_vencido, receber_proximos_7_dias,
+pagar_vencido, pagar_proximos_7_dias, ticket_medio, atendimentos_recebidos, receita_por_profissional[] }` e
+`pendencias.retornos_vencidos`. Taxas são `null` quando a base é zero; comparecimento/faltas usam como base os não
+cancelados com início já alcançado. Profissional nunca vê `financeiro`, solicitações nem lista de espera; a query
+aceita também `profissionalId`.
+
 ---
 
 ## 7. Cobrança automática do SaaS — super admin
@@ -281,21 +330,37 @@ Interface dos gateways: `src/servicos/pagamentos/tipos.ts` (`criarCliente`, `cri
 | Rota | Acesso | Body | Resposta |
 |---|---|---|---|
 | `GET /admin/cobranca/gateways` | super admin | — | `[{ provedor, nome, configurado, ambiente, ativo, credenciais_final, segredo_webhook_final, dias_tolerancia, metodos, url_webhook }]` (os 3) |
-| `PUT /admin/cobranca/gateways/:provedor` | super admin | `{ ambiente?, credenciais?: { api_key } \| { secret_key, publishable_key? } \| { access_token, public_key? }, segredo_webhook?: string \| null, dias_tolerancia? (0–60), metodos? }` | gateway (sem segredos) |
+| `PUT /admin/cobranca/gateways/:provedor` | super admin | `{ ambiente?, credenciais?: { api_key } \| { secret_key, publishable_key? } \| { access_token, public_key? }, segredo_webhook?: string \| null, dias_tolerancia? (0–60), metodos?, dia_vencimento_padrao? (1–28), descricao_cobranca? }` | gateway (sem segredos). Campo de segredo vazio mantém o atual; `segredo_webhook: null` remove. Stripe: chave `sk_test_`/`sk_live_` coerente com o ambiente e webhook `whsec_` |
 | `POST /admin/cobranca/gateways/:provedor/ativar` · `/desativar` | super admin | — | gateway. 409 `gateway_nao_configurado` |
-| `POST /admin/cobranca/gateways/:provedor/testar` | super admin | — | `{ ok, mensagem }` |
-| `GET /admin/cobranca/cobrancas` | super admin | `status?, clinica_id?, pagina, por_pagina` | `Paginado<Cobranca & { clinica: { id, nome } }>` |
+| `POST /admin/cobranca/gateways/:provedor/testar` | super admin | — | `{ ok, mensagem }` (falha no gateway vira `ok: false` com mensagem amigável) |
+| `GET /admin/cobranca/cobrancas` | super admin | `status?, clinica_id?, de?, ate? (vencimento), pagina, por_pagina` | `Paginado<Cobranca & { clinica: { id, nome, email } }> & { totais: { recebido, pendente, vencido, quantidade: { paga, pendente, vencida } } }` |
 | `POST /admin/cobranca/clinicas/:clinicaId/cobrancas` | super admin | `{ vencimento, valor? (padrão preço do plano), descricao?, metodo? }` | 201 cobrança (com `link_pagamento`) |
-| `POST /admin/cobranca/clinicas/:clinicaId/assinatura` | super admin | `{ dia_vencimento, metodo? }` | assinatura atualizada |
+| `GET /admin/cobranca/clinicas/:clinicaId` | super admin | — | `{ clinica, assinatura: { status, expira_em, gateway, dia_vencimento, metodo_cobranca, cobranca_automatica, cliente_no_gateway, plano }, cobrancas (últimas 12) }` |
+| `POST /admin/cobranca/clinicas/:clinicaId/assinatura` | super admin | `{ dia_vencimento, metodo?, gerar_agora? = true }` | `{ assinatura, cobranca \| null }` — liga a cobrança automática (cliente no gateway + dia; `metodo` ⇒ `assinaturas.metodo_cobranca`) e, com `gerar_agora`, gera a do próximo vencimento se o mês ainda não tiver cobrança |
+| `DELETE /admin/cobranca/clinicas/:clinicaId/assinatura` | super admin | — | desliga a cobrança automática (cobranças já emitidas continuam valendo) |
 | `POST /admin/cobranca/cobrancas/:id/cancelar` | super admin | — | cobrança |
 | `GET /admin/cobranca/eventos` | super admin | `gateway?, pagina` | `Paginado<EventoGateway>` |
 | `GET /cobrancas/minhas` | admin da clínica | — | faturas da clínica (sem `payload`) |
 | `POST /webhooks/pagamentos/:gateway` | público | corpo do gateway (cru em `request.corpoCru`) | 200 `{ ok }` / `{ duplicado }` / `{ ignorado }`; 401 se não autêntico |
 
-Efeitos: `cobranca_paga` ⇒ cobrança `paga` + `pago_em` e assinatura `ativa` (e `expira_em` null);
-`vencida`/`cancelada`/`estornada` ⇒ status da cobrança. Job diário: pendentes vencidas ⇒ `vencida`;
-assinatura com cobrança vencida há mais de `dias_tolerancia` ⇒ `vencida` (somente leitura automático via
-`statusEfetivo`/`ehSomenteLeitura`). URL do webhook: `${env.API_URL_PUBLICA}/webhooks/pagamentos/<gateway>`
+Efeitos: `cobranca_paga` ⇒ cobrança `paga` + `pago_em` e assinatura `ativa` (exceto se `cancelada`/`bloqueada`
+manualmente — o evento registra um aviso) e **`expira_em` avança** para o fim do ciclo pago
+(vencimento + 1 mês + `dias_tolerancia`, 23:59 em `TZ_PADRAO`; nunca recua). É uma segunda barreira coerente com
+`statusEfetivo`: se o worker parar, a clínica ainda cai em somente leitura quando o ciclo pago acabar — nunca antes.
+(O contrato original dizia `expira_em` null; a implementação manteve o avanço por esse motivo.)
+`vencida`/`cancelada`/`estornada` ⇒ só o status da cobrança. Job diário: pendentes com vencimento < hoje ⇒
+`vencida`; gera a cobrança do próximo ciclo (até 10 dias antes, no máximo uma por mês — uma cobrança cancelada
+significa "não cobrar este mês") no método `assinaturas.metodo_cobranca` e com a descrição
+`gateways_pagamento.descricao_cobranca`; cobrança em aberto há **mais** de `dias_tolerancia` dias ⇒ assinatura
+`ativa` → **`vencida`** (somente leitura via `statusEfetivo`/`ehSomenteLeitura`; volta a `ativa` com o
+pagamento). `bloqueada` fica reservado ao bloqueio manual do super admin. Recorrência: o **nosso** worker gera uma
+cobrança avulsa por ciclo nos três gateways (não usamos a assinatura nativa de cada um). Sem gateway ativo nada é
+gerado e nada quebra.
+
+**Troca de plano (admin-clinicas):** `PUT /admin/clinicas/:id/assinatura` que atribui um plano **pago** com gateway
+ativo chama `ativarCobrancaAutomatica({ clinicaId, diaVencimento })` (dia = o da assinatura ou o
+`dia_vencimento_padrao` do gateway). A resposta traz `cobranca_automatica: null | { ativada, mensagem }`; falha no
+gateway não desfaz a troca de plano. Sem gateway ativo, plano gratuito ou assinatura cancelada/bloqueada ⇒ `null`. URL do webhook: `${env.API_URL_PUBLICA}/webhooks/pagamentos/<gateway>`
 (produção: `https://DOMINIO/api/webhooks/pagamentos/<gateway>`). **Chaves:** `chavesAdminCobranca.*`
 (raiz `['admin','cobranca']`; faturas da clínica `['cobrancas','minhas']`).
 
@@ -373,6 +438,12 @@ Pontos de extensão já incluídos (cada dono só implementa o componente):
 | `configuracoes/ConfigAgendamentoOnline.tsx` | Configurações | admin · `agendamento_online` | agendamento-online |
 | `solicitacoes/AvisoTopoSolicitacoes.tsx` | topo do app (ao lado do sino) | admin/recepção · `agendamento_online` | agendamento-online |
 | `lista-espera/AvisoTopoListaEspera.tsx` | topo do app | admin/recepção · `lista_espera` | lista-espera |
+| `configuracoes/MinhasFaturas.tsx` | Configurações | admin (some se a clínica nunca teve cobrança) | admin-cobranca |
+| `admin/cobranca/BlocoCobrancaClinica.tsx` | Detalhe da clínica (super admin) | sempre | admin-cobranca |
+
+**Agenda pré-preenchida:** `/agenda?novo=1&paciente_id=&profissional_id=&data=YYYY-MM-DD` abre o diálogo de novo
+agendamento já preenchido (data passada vira hoje; os parâmetros saem da URL). Usado em Retornos ("Agendar na
+agenda") e na Lista de espera. As sugestões da lista de espera no painel da agenda agendam direto no horário liberado.
 
 Tipos/enums compartilhados novos em `api/tipos.ts` (`FormaPagamento`, `StatusTitulo`, `Turno`,
 `TipoDocumentoClinico`, `StatusRetorno`, `ProvedorPagamento`… com `ROTULOS_*`); `Me.clinica.slug`.

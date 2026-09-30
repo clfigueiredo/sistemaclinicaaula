@@ -29,7 +29,11 @@ export function mascararCpfCnpj(v: string): string {
 }
 
 export function mascararTelefone(v: string): string {
-  const d = somenteDigitos(v).slice(0, 11);
+  let d = somenteDigitos(v);
+  // A API grava telefones normalizados com DDI 55 ("5511999998888"): exibe no formato nacional.
+  // Só para valores vindos da API (só dígitos) — o que o usuário digita já chega mascarado.
+  if (/^\d+$/.test(v) && (d.length === 12 || d.length === 13) && d.startsWith('55')) d = d.slice(2);
+  d = d.slice(0, 11);
   if (d.length <= 10) return d.replace(/(\d{2})(\d)/, '($1) $2').replace(/(\d{4})(\d{1,4})$/, '$1-$2');
   return d.replace(/(\d{2})(\d)/, '($1) $2').replace(/(\d{5})(\d{1,4})$/, '$1-$2');
 }

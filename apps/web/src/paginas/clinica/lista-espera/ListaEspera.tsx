@@ -7,6 +7,7 @@ import { Link } from 'react-router-dom';
 import { format } from 'date-fns';
 import {
   CalendarCheck,
+  CalendarPlus,
   ListOrdered,
   Loader2,
   MessageCircle,
@@ -249,6 +250,13 @@ export default function PaginaListaEspera() {
                         </DropdownMenuItem>
                         {item.status === 'aguardando' ? (
                           <>
+                            <DropdownMenuItem asChild>
+                              <Link
+                                to={`/agenda?novo=1&paciente_id=${item.paciente.id}${item.profissional ? `&profissional_id=${item.profissional.id}` : ''}`}
+                              >
+                                <CalendarPlus className="size-4" /> Agendar na agenda
+                              </Link>
+                            </DropdownMenuItem>
                             <DropdownMenuItem onSelect={() => alterarStatus(item, 'agendado')}>
                               <CalendarCheck className="size-4" /> Marcar como agendado
                             </DropdownMenuItem>

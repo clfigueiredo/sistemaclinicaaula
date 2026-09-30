@@ -38,6 +38,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { formatarData, formatarDataHora, formatarMoeda, mascararCpfCnpj, mascararTelefone } from '@/lib/formatos';
 import { cn } from '@/lib/utils';
 import { BadgeSituacao, BadgeStatusAssinatura, BarraUso, DialogoConfirmacao, ErroCarregar, textoUso } from '../comum';
+import BlocoCobrancaClinica from '../cobranca/BlocoCobrancaClinica';
 
 const DESCRICAO_STATUS: Record<StatusAssinatura, string> = {
   teste: 'Teste grátis: acesso completo dentro dos limites do plano.',
@@ -295,6 +296,9 @@ function Conteudo({ d }: { d: DetalheClinicaAdmin }) {
         </CardContent>
       </Card>
 
+      {/* Cobrança do SaaS (admin-cobranca) */}
+      <BlocoCobrancaClinica clinicaId={clinica.id} />
+
       {/* Usuários */}
       <Card className="pb-0">
         <CardHeader>
@@ -361,8 +365,13 @@ function useSalvarAssinatura(d: DetalheClinicaAdmin, aoFechar: () => void) {
   const alterar = useAlterarAssinatura(d.clinica.id);
   async function salvar(dados: DadosAssinatura, sucesso: string) {
     try {
-      await alterar.mutateAsync(dados);
+      const r = await alterar.mutateAsync(dados);
       toast.success(sucesso);
+      // Plano pago com gateway ativo: a API tenta ligar a cobrança automática.
+      if (r.cobranca_automatica) {
+        if (r.cobranca_automatica.ativada) toast.success(r.cobranca_automatica.mensagem);
+        else toast.warning(r.cobranca_automatica.mensagem);
+      }
       aoFechar();
     } catch (e) {
       toast.error(mensagemDeErro(e));

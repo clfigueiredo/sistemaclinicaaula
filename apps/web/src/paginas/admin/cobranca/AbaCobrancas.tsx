@@ -70,6 +70,7 @@ import { Label } from '@/componentes/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/componentes/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/componentes/ui/table';
 import { formatarData, formatarMoeda } from '@/lib/formatos';
+import { cn } from '@/lib/utils';
 import { BadgeStatusAssinatura, CardKpi, DialogoConfirmacao, ErroCarregar } from '../comum';
 import { BadgeStatusCobranca, copiarTexto, dataIsoMaisDias, Paginacao } from './comum';
 
@@ -338,6 +339,7 @@ export default function AbaCobrancas() {
         <DialogoCobrancaAutomatica
           clinicaInicial={clinicaId}
           diaPadrao={gatewayAtivo?.dia_vencimento_padrao ?? 10}
+          metodos={gatewayAtivo?.metodos ?? []}
           nomeGateway={gatewayAtivo?.nome ?? null}
           aoFechar={() => setDialogo(null)}
         />
@@ -405,16 +407,19 @@ const esquemaGerar = z.object({
 });
 type CamposGerar = z.infer<typeof esquemaGerar>;
 
-function DialogoGerarCobranca({
+export function DialogoGerarCobranca({
   clinicaInicial,
   metodos,
   nomeGateway,
   aoFechar,
+  fixarClinica = false,
 }: {
   clinicaInicial: string;
   metodos: MetodoCobranca[];
   nomeGateway: string | null;
   aoFechar: () => void;
+  /** Esconde o seletor de clínica (aberto a partir do detalhe da clínica). */
+  fixarClinica?: boolean;
 }) {
   const criar = useCriarCobranca();
   const form = useForm<CamposGerar>({
@@ -460,7 +465,7 @@ function DialogoGerarCobranca({
               control={form.control}
               name="clinica_id"
               render={({ field }) => (
-                <FormItem className="sm:col-span-2">
+                <FormItem className={cn('sm:col-span-2', fixarClinica && 'hidden')}>
                   <FormLabel>Clínica</FormLabel>
                   <SeletorClinica valor={field.value} aoMudar={field.onChange} />
                   <FormMessage />
@@ -549,31 +554,45 @@ function DialogoGerarCobranca({
 
 // ----------------------------------------------------------------------------- cobrança automática
 
-function DialogoCobrancaAutomatica({
+export function DialogoCobrancaAutomatica({
   clinicaInicial,
   diaPadrao,
+  metodos,
   nomeGateway,
   aoFechar,
+  fixarClinica = false,
 }: {
   clinicaInicial: string;
   diaPadrao: number;
+  metodos: MetodoCobranca[];
   nomeGateway: string | null;
   aoFechar: () => void;
+  /** Esconde o seletor de clínica (aberto a partir do detalhe da clínica). */
+  fixarClinica?: boolean;
 }) {
   const [clinicaId, setClinicaId] = useState(clinicaInicial);
-  const [dia, setDia] = useState(String(diaPadrao));
+  const [dia, setDia] = useState<string | null>(null);
+  const [metodo, setMetodo] = useState<string | null>(null);
   const [gerarAgora, setGerarAgora] = useState(true);
   const detalhe = useCobrancaClinica(clinicaId || undefined);
   const ativar = useAtivarCobrancaClinica();
   const desativar = useDesativarCobrancaClinica();
   const assinatura = detalhe.data?.assinatura ?? null;
-  const diaValido = /^\d+$/.test(dia) && Number(dia) >= 1 && Number(dia) <= 28;
+  // Padrões: o que a assinatura já tem (ao "Atualizar") ou o do gateway.
+  const diaAtual = dia ?? String(assinatura?.dia_vencimento ?? diaPadrao);
+  const metodoAtual = metodo ?? assinatura?.metodo_cobranca ?? SEM_METODO;
+  const diaValido = /^\d+$/.test(diaAtual) && Number(diaAtual) >= 1 && Number(diaAtual) <= 28;
   const planoPago = assinatura ? Number(assinatura.plano.preco) > 0 : false;
   const ocupado = ativar.isPending || desativar.isPending;
 
   function ligar() {
     ativar.mutate(
-      { clinicaId, dia_vencimento: Number(dia), gerar_agora: gerarAgora },
+      {
+        clinicaId,
+        dia_vencimento: Number(diaAtual),
+        gerar_agora: gerarAgora,
+        ...(metodoAtual !== SEM_METODO && { metodo: metodoAtual as MetodoCobranca }),
+      },
       {
         onSuccess: (r) => {
           toast.success('Cobrança automática ligada.', {
@@ -611,10 +630,12 @@ function DialogoCobrancaAutomatica({
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="space-y-2">
-            <Label>Clínica</Label>
-            <SeletorClinica valor={clinicaId} aoMudar={setClinicaId} />
-          </div>
+          {!fixarClinica && (
+            <div className="space-y-2">
+              <Label>Clínica</Label>
+              <SeletorClinica valor={clinicaId} aoMudar={setClinicaId} />
+            </div>
+          )}
 
           {clinicaId && detalhe.isLoading && <Carregando texto="Carregando assinatura…" />}
           {clinicaId && detalhe.isError && <p className="text-sm text-destructive">{mensagemDeErro(detalhe.error)}</p>}
@@ -632,7 +653,7 @@ function DialogoCobrancaAutomatica({
               <p className="mt-1 flex items-center gap-1.5 text-muted-foreground">
                 <CalendarClock className="size-4" />
                 {assinatura.cobranca_automatica
-                  ? `Ligada: vence todo dia ${assinatura.dia_vencimento} (${assinatura.gateway ? ROTULOS_PROVEDOR_PAGAMENTO[assinatura.gateway] : '—'}).`
+                  ? `Ligada: vence todo dia ${assinatura.dia_vencimento} (${assinatura.gateway ? ROTULOS_PROVEDOR_PAGAMENTO[assinatura.gateway] : '—'}${assinatura.metodo_cobranca ? ` · ${ROTULOS_METODO_COBRANCA[assinatura.metodo_cobranca]}` : ''}).`
                   : 'Cobrança automática desligada.'}
               </p>
               {!planoPago && <p className="mt-1 text-amber-700 dark:text-amber-300">Plano gratuito: não há o que cobrar.</p>}
@@ -649,12 +670,28 @@ function DialogoCobrancaAutomatica({
                   min={1}
                   max={28}
                   inputMode="numeric"
-                  value={dia}
+                  value={diaAtual}
                   onChange={(e) => setDia(e.target.value)}
                   className="w-32"
                   aria-invalid={!diaValido}
                 />
                 {!diaValido && <p className="text-sm text-destructive">Informe um dia entre 1 e 28.</p>}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="metodo-preferido">Método preferido</Label>
+                <Select value={metodoAtual} onValueChange={setMetodo}>
+                  <SelectTrigger id="metodo-preferido" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={SEM_METODO}>Cliente escolhe (métodos permitidos no gateway)</SelectItem>
+                    {metodos.map((m) => (
+                      <SelectItem key={m} value={m}>
+                        {ROTULOS_METODO_COBRANCA[m]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <label className="flex items-start gap-2 text-sm">
                 <Checkbox checked={gerarAgora} onCheckedChange={(c) => setGerarAgora(c === true)} className="mt-0.5" />

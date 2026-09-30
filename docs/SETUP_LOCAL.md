@@ -124,7 +124,9 @@ npm run e2e                 # smoke test E2E no navegador (com `npm run dev` rod
 O smoke test E2E usa Playwright (`apps/web/e2e/smoke/*.spec.ts`). Na primeira vez instale o browser:
 `cd apps/web && npx playwright install chromium`. Ele percorre os fluxos do super admin, do auto-cadastro
 (teste grátis e limites), da clínica demo como admin (agenda, pacientes, prontuário, anexo, WhatsApp) e
-dos papéis recepção/profissional (inclusive em 390 px). Screenshots e `relatorio.txt` com erros de console
+dos papéis recepção/profissional (inclusive em 390 px) e, da fase 2, cobrança do super admin, agendamento online
+(página pública + aprovação/recusa), financeiro, documentos, retornos, lista de espera e dashboard
+(`05-*` a `08-*`). Screenshots e `relatorio.txt` com erros de console
 e respostas HTTP 4xx/5xx inesperadas ficam em `apps/web/e2e/capturas/`. Cada execução cria uma clínica
 de teste nova (auto-cadastro) e alguns pacientes/agendamentos na Clínica Demo — rode `npm run db:seed`
 depois de `docker compose down -v` se quiser um banco limpo.
@@ -161,6 +163,65 @@ WhatsApp de teste — a integração é **não oficial** (WPPConnect) e há risc
 Se a resposta não for processada: confira nos logs da API se chegou `POST /webhooks/whatsapp` (401 =
 token diferente entre `.env` e o container) e se o container alcança o host (`host.docker.internal:3333`).
 No plano **Teste grátis** só 1 mensagem é permitida no total (`max_mensagens` = 1).
+
+## Testar os módulos da fase 2 (manual)
+
+Todos com a Clínica Demo (plano **Profissional**, todos os recursos da fase 2 habilitados).
+
+### Agendamento online
+
+1. Como `admin@demo.local`: **Configurações → Agendamento online** — ligue o agendamento online, ajuste
+   antecedência/dias à frente e escolha os profissionais visíveis. O link público aparece ali
+   (`http://localhost:5173/agendar/clinica-demo`; o slug é editável em **Configurações → Editar**).
+2. Numa janela anônima (ou no celular na mesma rede, trocando `localhost` pelo IP do PC), abra o link, escolha
+   profissional, dia e horário, preencha nome/telefone e envie. Aparece a mensagem de solicitação recebida.
+3. Como `recepcao@demo.local`: o aviso no topo mostra as solicitações pendentes; em **Solicitações**, abra a
+   solicitação e **Aprove** (cria o paciente, ou use um candidato com o mesmo CPF/telefone) — o agendamento
+   aparece na **Agenda**. **Recusar** grava o motivo. Com WhatsApp conectado e o consentimento marcado no
+   formulário, o paciente recebe a confirmação/recusa.
+
+### Financeiro
+
+1. Como admin: **Financeiro → Caixa** — lance uma entrada e uma saída (a conta "Caixa" e as categorias padrão são
+   criadas no primeiro acesso) e estorne uma delas (o estorno é uma movimentação inversa; nada é apagado).
+2. **Contas a pagar/receber**: crie um título (parcelado em N vezes, se quiser) e dê baixa; **Recorrências**:
+   crie uma mensalidade/aluguel (gera os títulos do mês; o job das 06:00 gera os próximos).
+3. **Repasses**: defina o percentual de um profissional e registre o pagamento do repasse de um período.
+4. **Relatórios**: resumo, gráficos e exportação CSV. **Configurações**: contas e categorias.
+5. Na **Agenda**, no painel de um agendamento: **Registrar recebimento** (particular ⇒ entrada no caixa;
+   convênio ⇒ título a receber do convênio).
+6. Papéis: a recepção lança e dá baixa, mas não vê relatórios/repasses/configurações; o profissional vê só os
+   próprios recebimentos e repasses.
+
+### Cobrança do SaaS (gateway em sandbox)
+
+A cobrança automática é do **super admin** (`/admin/cobranca`). Para testar com um gateway de verdade use sempre
+o ambiente **sandbox** (Asaas sandbox, Stripe em modo teste `sk_test_...`, Mercado Pago com credenciais de teste).
+Os webhooks precisam alcançar a API pela internet — em dev, com um túnel:
+
+```powershell
+# 1. Túnel HTTPS para a API (Cloudflare, sem conta):
+winget install --id Cloudflare.cloudflared      # uma vez
+cloudflared tunnel --url http://localhost:3333  # anote a URL https://<algo>.trycloudflare.com
+
+# 2. No .env da raiz:
+#    API_URL_PUBLICA=https://<algo>.trycloudflare.com
+#    CHAVE_CRIPTOGRAFIA=<64 hex — openssl rand -hex 32; NÃO troque depois de salvar credenciais>
+# 3. Reinicie o `npm run dev` (as variáveis só são lidas na subida da API).
+```
+
+1. `/admin/cobranca` → **Gateways**: escolha o gateway, ambiente **sandbox**, cole a chave de teste, defina o
+   segredo do webhook, tolerância, métodos, dia de vencimento padrão e a descrição. **Testar conexão** deve dar ok.
+   **Ativar** (só um gateway fica ativo).
+2. No painel do gateway, cadastre o webhook com a **URL do webhook** mostrada no card
+   (`<API_URL_PUBLICA>/webhooks/pagamentos/<gateway>`) e o mesmo segredo.
+3. Em **Clínicas → (clínica) → Cobrança**, ligue a **cobrança automática** (dia de vencimento e método) ou
+   **gere uma cobrança** avulsa. Atribuir um plano pago a uma clínica já liga a cobrança automática.
+4. Pague a cobrança pelo link (sandbox). O webhook marca a cobrança como paga, a assinatura fica ativa e
+   `expira_em` avança até o fim do ciclo + tolerância. Os eventos recebidos ficam na aba **Eventos**.
+5. A clínica vê as faturas em **Configurações → Faturas do sistema** (admin).
+
+Sem túnel dá para testar tudo menos a confirmação automática de pagamento. Sem gateway ativo nada é gerado.
 
 ### Problemas comuns
 

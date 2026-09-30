@@ -110,6 +110,8 @@ export type AssinaturaCobranca = {
   expira_em: string | null;
   gateway: ProvedorPagamento | null;
   dia_vencimento: number | null;
+  /** Método preferido da cobrança automática (null = o cliente escolhe no link). */
+  metodo_cobranca: MetodoCobranca | null;
   cobranca_automatica: boolean;
   cliente_no_gateway: boolean;
   plano: { id: string; nome: string; preco: string };

@@ -284,7 +284,9 @@ export default function PaginaRetornos() {
                           {aberto && (
                             <>
                               <DropdownMenuItem asChild>
-                                <Link to="/agenda">
+                                <Link
+                                  to={`/agenda?novo=1&paciente_id=${r.paciente.id}&profissional_id=${r.profissional.id}&data=${r.data_prevista}`}
+                                >
                                   <CalendarPlus /> Agendar na agenda
                                 </Link>
                               </DropdownMenuItem>

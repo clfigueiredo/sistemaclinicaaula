@@ -10,9 +10,15 @@ import { cn } from '@/lib/utils';
 export default function LayoutFinanceiro() {
   const { data: me } = useMe();
   const abas = itensPermitidos(ABAS_FINANCEIRO, me?.papel);
+  const descricao =
+    me?.papel === 'profissional'
+      ? 'Seus recebimentos e repasses.'
+      : me?.papel === 'recepcao'
+        ? 'Caixa e contas a pagar e a receber.'
+        : 'Caixa, contas a pagar e a receber, recorrências, repasses e relatórios.';
   return (
     <div>
-      <CabecalhoPagina titulo="Financeiro" descricao="Caixa, contas a pagar e a receber, recorrências, repasses e relatórios." />
+      <CabecalhoPagina titulo="Financeiro" descricao={descricao} />
       <nav className="mb-6 flex gap-1 overflow-x-auto border-b">
         {abas.map((aba) => (
           <NavLink

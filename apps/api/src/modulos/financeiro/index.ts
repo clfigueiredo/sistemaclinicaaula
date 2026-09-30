@@ -48,7 +48,7 @@
  * Rotas adicionais (além do contrato):
  *   PUT    /financeiro/movimentacoes/:id              admin             só descricao/categoria_id (valor/tipo/data/conta são imutáveis)
  *   POST   /financeiro/recebimentos/convenio          admin, recepção   consulta de convênio ⇒ título A RECEBER (fornecedor = convênio)
- *                                                                        vinculado ao agendamento por marcador em `observacoes`
+ *                                                                        vinculado ao agendamento por `titulos.agendamento_id`
  *   GET    /financeiro/titulos/:id                    admin, recepção
  *   GET    /financeiro/repasses/entradas?inicio&fim&profissional_id   admin; profissional (forçado ao próprio)
  *   GET    /financeiro/relatorios/exportar?tipo=movimentacoes|categorias|formas|profissionais|fluxo|repasses&inicio&fim   admin (CSV)

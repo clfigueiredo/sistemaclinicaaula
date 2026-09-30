@@ -49,7 +49,13 @@ const esquema = z
 
 type Dados = z.infer<typeof esquema>;
 
-export type SugestaoNovo = { inicio?: Date; fim?: Date; profissionalId?: string };
+export type SugestaoNovo = {
+  inicio?: Date;
+  fim?: Date;
+  profissionalId?: string;
+  /** Paciente já escolhido (ex.: "Agendar" em Retornos / Lista de espera). */
+  paciente?: { id: string; nome: string; convenio_id?: string | null } | null;
+};
 
 export function DialogoAgendamento({
   aberto,
@@ -107,7 +113,7 @@ export function DialogoAgendamento({
     const temHora = !!ini && (ini.getHours() !== 0 || ini.getMinutes() !== 0 || !!sugestao?.fim);
     const duracaoSel = ini && sugestao?.fim ? differenceInMinutes(sugestao.fim, ini) : 0;
     return {
-      paciente: null,
+      paciente: sugestao?.paciente ?? null,
       profissional_id: profId,
       dia: ini ? diaLocal(ini) : diaLocal(new Date()),
       hora: ini && temHora && duracaoSel < 24 * 60 ? horaLocal(ini) : '',

@@ -351,3 +351,62 @@ describe('retornos — ações, configuração e isolamento', () => {
     expect(criar.statusCode).toBe(404);
   });
 });
+
+describe('retornos — vínculo na hora ao criar agendamento', () => {
+  it('POST /agendamentos marca o retorno em aberto do mesmo paciente+profissional (dentro da janela)', async () => {
+    const plano = await criarPlano({ retorno_automatico: ligado, max_agendamentos: ligado });
+    const C = await criarClinica(plano.id);
+    const adm = await C.usuario('admin');
+    const p = await C.db.profissional.create({ data: { nome: 'Dra. Carla Vínculo' } });
+    const outro = await C.db.profissional.create({ data: { nome: 'Dr. Davi Outro' } });
+    const pac = await C.db.paciente.create({ data: { nome: 'Paciente Vínculo' } });
+    const origem = await C.agendamento(pac.id, p.id, '2026-08-01T13:00:00Z', 'atendido');
+    const retorno = await C.db.retorno.create({
+      data: { paciente_id: pac.id, profissional_id: p.id, agendamento_origem_id: origem.id, data_prevista: new Date('2026-08-31T00:00:00Z') },
+    });
+    const criar = (profissionalId: string, inicio: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/agendamentos',
+        headers: adm.h,
+        payload: { paciente_id: pac.id, profissional_id: profissionalId, inicio, encaixe: true },
+      });
+
+    // Outro profissional: não vincula.
+    const r1 = await criar(outro.id, '2026-09-10T13:00:00Z');
+    expect(r1.statusCode, r1.body).toBe(201);
+    expect(r1.json().retorno_vinculado_id).toBeNull();
+    // Fora da janela (data prevista + 90 dias): não vincula.
+    const r2 = await criar(p.id, '2026-12-15T13:00:00Z');
+    expect(r2.json().retorno_vinculado_id).toBeNull();
+    // Mesmo profissional, dentro da janela: vincula na hora.
+    const r3 = await criar(p.id, '2026-09-10T15:00:00Z');
+    expect(r3.statusCode, r3.body).toBe(201);
+    expect(r3.json().retorno_vinculado_id).toBe(retorno.id);
+    expect(await C.db.retorno.findUniqueOrThrow({ where: { id: retorno.id } })).toMatchObject({
+      status: 'agendado',
+      agendamento_retorno_id: r3.json().id,
+    });
+  });
+
+  it('sem o recurso retorno_automatico não mexe nos retornos', async () => {
+    const plano = await criarPlano({ max_agendamentos: ligado });
+    const C = await criarClinica(plano.id);
+    const adm = await C.usuario('admin');
+    const p = await C.db.profissional.create({ data: { nome: 'Dr. Sem Recurso' } });
+    const pac = await C.db.paciente.create({ data: { nome: 'Paciente Sem Recurso' } });
+    const origem = await C.agendamento(pac.id, p.id, '2026-08-01T13:00:00Z', 'atendido');
+    const retorno = await C.db.retorno.create({
+      data: { paciente_id: pac.id, profissional_id: p.id, agendamento_origem_id: origem.id, data_prevista: new Date('2026-08-31T00:00:00Z') },
+    });
+    const r = await app.inject({
+      method: 'POST',
+      url: '/agendamentos',
+      headers: adm.h,
+      payload: { paciente_id: pac.id, profissional_id: p.id, inicio: '2026-09-10T13:00:00Z', encaixe: true },
+    });
+    expect(r.statusCode, r.body).toBe(201);
+    expect(r.json().retorno_vinculado_id).toBeNull();
+    expect((await C.db.retorno.findUniqueOrThrow({ where: { id: retorno.id } })).status).toBe('pendente');
+  });
+});

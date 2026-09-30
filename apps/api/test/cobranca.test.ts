@@ -203,6 +203,10 @@ describe('configuração dos gateways', () => {
     expect(registro.credenciais_cifradas).not.toContain(API_KEY_ASAAS);
     expect(registro.segredo_webhook_cifrado).not.toContain(TOKEN_WEBHOOK_ASAAS);
     expect(descriptografarJson<{ api_key: string }>(registro.credenciais_cifradas!).api_key).toBe(API_KEY_ASAAS);
+    // Opções gerais em colunas próprias (fora do JSON cifrado).
+    expect(registro.dia_vencimento_padrao).toBe(15);
+    expect(registro.descricao_cobranca).toBe('Mensalidade {plano} {competencia}');
+    expect(descriptografarJson<Record<string, unknown>>(registro.credenciais_cifradas!)).not.toHaveProperty('opcoes');
 
     // Edição com campos vazios mantém os segredos.
     const editado = await comoAdmin('PUT', '/admin/cobranca/gateways/asaas', {
@@ -524,10 +528,16 @@ describe('worker de cobranças', () => {
     const diaVencimento = Math.min(28, Math.max(1, dia));
     const ativar = await comoAdmin('POST', `/admin/cobranca/clinicas/${clinica.id}/assinatura`, {
       dia_vencimento: diaVencimento,
+      metodo: 'boleto',
       gerar_agora: false,
     });
     expect(ativar.statusCode).toBe(200);
-    expect(ativar.json().assinatura).toMatchObject({ cobranca_automatica: true, dia_vencimento: diaVencimento, gateway: 'asaas' });
+    expect(ativar.json().assinatura).toMatchObject({
+      cobranca_automatica: true,
+      dia_vencimento: diaVencimento,
+      gateway: 'asaas',
+      metodo_cobranca: 'boleto',
+    });
 
     const vencimento = proximoVencimento(hoje, diaVencimento);
     const diaDoJob = somarDias(vencimento, -5);
@@ -539,6 +549,7 @@ describe('worker de cobranças', () => {
     expect(doMes).toHaveLength(1);
     expect(doMes[0]!.vencimento.toISOString().slice(0, 10)).toBe(vencimento);
     expect(doMes[0]!.link_pagamento).toMatch(/^https:\/\/pagar\.exemplo\//);
+    expect(doMes[0]!.metodo).toBe('boleto'); // método preferido da assinatura (assinaturas.metodo_cobranca)
 
     // Visão da clínica no admin.
     const visao = await comoAdmin('GET', `/admin/cobranca/clinicas/${clinica.id}`);
@@ -553,7 +564,42 @@ describe('worker de cobranças', () => {
     expect(await prisma.cobranca.count({ where: { clinica_id: clinica.id } })).toBe(1);
 
     const desligar = await comoAdmin('DELETE', `/admin/cobranca/clinicas/${clinica.id}/assinatura`);
-    expect(desligar.json().assinatura.cobranca_automatica).toBe(false);
+    expect(desligar.json().assinatura).toMatchObject({ cobranca_automatica: false, metodo_cobranca: null });
+  });
+
+  it('atribuir plano pago (admin-clinicas) liga a cobrança automática no gateway ativo', async () => {
+    await configurarAsaas({ dia_vencimento_padrao: 12 });
+    await comoAdmin('POST', '/admin/cobranca/gateways/asaas/ativar');
+    const fake = criarFake();
+    fake.estado.cobrancas = 100; // ids externos distintos dos gerados nos testes anteriores (unique gateway+id_externo)
+    definirFabricaGateway(fake.fabrica);
+    const gratis = await prisma.plano.create({ data: { nome: `Grátis ${sufixo}`, preco: 0 } });
+    try {
+      const { clinica, assinatura } = await criarClinica();
+      await prisma.assinatura.update({ where: { id: assinatura.id }, data: { plano_id: gratis.id, status: 'teste' } });
+
+      const r = await comoAdmin('PUT', `/admin/clinicas/${clinica.id}/assinatura`, { plano_id: planoId });
+      expect(r.statusCode, r.body).toBe(200);
+      expect(r.json().cobranca_automatica).toMatchObject({ ativada: true });
+      const a = await prisma.assinatura.findUniqueOrThrow({ where: { id: assinatura.id } });
+      expect(a).toMatchObject({ status: 'ativa', gateway: 'asaas', dia_vencimento: 12 });
+      expect(await prisma.cobranca.count({ where: { clinica_id: clinica.id } })).toBe(1);
+
+      // Plano gratuito: não mexe na cobrança.
+      const r2 = await comoAdmin('PUT', `/admin/clinicas/${clinica.id}/assinatura`, { plano_id: gratis.id });
+      expect(r2.statusCode).toBe(200);
+      expect(r2.json().cobranca_automatica).toBeNull();
+
+      // Sem gateway ativo: troca de plano funciona e não liga nada.
+      await comoAdmin('POST', '/admin/cobranca/gateways/asaas/desativar');
+      const r3 = await comoAdmin('PUT', `/admin/clinicas/${clinica.id}/assinatura`, { plano_id: planoId });
+      expect(r3.statusCode).toBe(200);
+      expect(r3.json().cobranca_automatica).toBeNull();
+      expect(await prisma.cobranca.count({ where: { clinica_id: clinica.id } })).toBe(1);
+    } finally {
+      await prisma.assinatura.updateMany({ where: { plano_id: gratis.id }, data: { plano_id: planoId } });
+      await prisma.plano.delete({ where: { id: gratis.id } });
+    }
   });
 
   it('tolerância: cobrança em aberto há mais de N dias ⇒ assinatura vencida', async () => {

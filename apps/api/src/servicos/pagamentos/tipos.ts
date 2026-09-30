@@ -24,8 +24,9 @@ export type CredenciaisGateway =
   | { provedor: 'mercado_pago'; access_token: string; public_key?: string };
 
 /**
- * Opções gerais do gateway que NÃO têm coluna própria no schema (congelado): gravadas junto das
- * credenciais no JSON cifrado (`credenciais_cifradas.opcoes`). Não são segredo — só moram ali.
+ * Opções gerais do gateway (colunas `gateways_pagamento.dia_vencimento_padrao` e `descricao_cobranca`,
+ * migration `ajustes_fase2`). Antes moravam no JSON cifrado (`credenciais_cifradas.opcoes`) — esse campo
+ * legado é ignorado na leitura e não é mais gravado.
  */
 export type OpcoesGateway = {
   /** Dia do mês (1–28) sugerido ao ativar a cobrança recorrente de uma clínica. */
@@ -39,7 +40,7 @@ export const OPCOES_GATEWAY_PADRAO: OpcoesGateway = {
   descricao_cobranca: 'Mensalidade do sistema — plano {plano} ({competencia})',
 };
 
-/** O que fica no JSON cifrado: credenciais + opções gerais. */
+/** O que fica no JSON cifrado: só as credenciais (`opcoes` = campo legado, ignorado). */
 export type CredenciaisArmazenadas = CredenciaisGateway & { opcoes?: Partial<OpcoesGateway> };
 
 export type ConfigGateway = {

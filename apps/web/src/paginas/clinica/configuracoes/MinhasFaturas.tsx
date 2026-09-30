@@ -1,8 +1,7 @@
 /**
  * Faturas da própria clínica (admin da clínica) — GET /cobrancas/minhas, só leitura.
- * Componente para a página de Configurações da clínica (paginas/clinica/configuracoes/Configuracoes.tsx),
- * que não é deste módulo: o dono de Configurações só precisa renderizar `<MinhasFaturas />` para o papel admin.
- * Não renderiza nada se a clínica nunca teve cobrança (planos gratuitos / cobrança manual).
+ * Renderizado em Configurações (só para o papel admin). Não renderiza nada se a clínica nunca teve
+ * cobrança (planos gratuitos / cobrança manual).
  */
 import { ExternalLink, Receipt } from 'lucide-react';
 import { useMinhasCobrancas } from '@/api/adminCobranca';
@@ -12,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Skeleton } from '@/componentes/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/componentes/ui/table';
 import { formatarData, formatarMoeda } from '@/lib/formatos';
-import { BadgeStatusCobranca } from './comum';
+import { BadgeStatusCobranca } from '@/paginas/admin/cobranca/comum';
 
 export default function MinhasFaturas({ className }: { className?: string }) {
   const { data, isLoading, isError, error } = useMinhasCobrancas();

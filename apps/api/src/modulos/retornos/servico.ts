@@ -5,6 +5,7 @@
  *   - linkAgendamentoOnline(clinicaId)                     link público se slug + ao_ativo + recurso
  *   - enviarConvite(clinicaId, retorno)                    enfileira o WhatsApp `convite_retorno`
  *   - reconciliarAgendados(clinicaId)                      detecta agendamento posterior ⇒ `agendado`
+ *   - vincularRetornoAoNovoAgendamento(clinicaId, ag)      mesma regra, na hora (POST /agendamentos e aprovação online)
  *   - enviarConvitesAutomaticos(clinicaId, hoje)           N dias antes, uma única vez, só com consentimento
  *
  * Fora do HTTP usamos `criarDbTenant(clinicaId)` (filtro de clinica_id automático).
@@ -31,6 +32,11 @@ export const STATUS_ABERTOS: StatusRetorno[] = ['pendente', 'lembrado'];
  * origem e até JANELA_DIAS_APOS dias depois da data prevista, é considerado o retorno.
  */
 export const JANELA_DIAS_APOS = 90;
+
+/** Limite superior (exclusivo) da janela: início do agendamento < data prevista + JANELA_DIAS_APOS + 1 dia. */
+export function fimJanelaRetorno(dataPrevista: Date): Date {
+  return somarDias(dataPrevista, JANELA_DIAS_APOS + 1);
+}
 
 /** Erros de envio que podem se resolver sozinhos (tenta de novo no próximo job). */
 const ERROS_TEMPORARIOS = new Set(['limite_atingido', 'recurso_indisponivel', 'assinatura_inativa', 'fila_indisponivel', 'clinica_inativa']);
@@ -139,7 +145,7 @@ export async function reconciliarAgendados(clinicaId: string): Promise<{ agendad
         profissional_id: r.profissional_id,
         id: { not: r.agendamento_origem_id },
         status: { notIn: ['cancelado', 'faltou'] },
-        inicio: { gt: r.agendamento_origem.inicio, lt: somarDias(r.data_prevista, JANELA_DIAS_APOS + 1) },
+        inicio: { gt: r.agendamento_origem.inicio, lt: fimJanelaRetorno(r.data_prevista) },
       },
       orderBy: { inicio: 'asc' },
       select: { id: true },
@@ -152,6 +158,46 @@ export async function reconciliarAgendados(clinicaId: string): Promise<{ agendad
     agendados += count;
   }
   return { agendados, reabertos };
+}
+
+/**
+ * Chamado logo depois de CRIAR um agendamento (POST /agendamentos e aprovação do agendamento online):
+ * se houver retorno em aberto (`pendente`/`lembrado`) do mesmo paciente+profissional cuja janela contém o
+ * novo agendamento (mesma regra do job: início depois da consulta de origem e antes de data prevista +
+ * JANELA_DIAS_APOS), marca o mais antigo como `agendado` e vincula o agendamento. Só com o recurso
+ * `retorno_automatico` habilitado. Nunca lança (o agendamento já foi criado): devolve o id do retorno ou null.
+ */
+export async function vincularRetornoAoNovoAgendamento(
+  clinicaId: string,
+  agendamento: { id: string; paciente_id: string; profissional_id: string; inicio: Date },
+): Promise<string | null> {
+  try {
+    if (!(await recursoHabilitado(clinicaId, 'retorno_automatico'))) return null;
+    const db = criarDbTenant(clinicaId);
+    const candidatos = await db.retorno.findMany({
+      where: {
+        status: { in: STATUS_ABERTOS },
+        paciente_id: agendamento.paciente_id,
+        profissional_id: agendamento.profissional_id,
+        agendamento_origem_id: { not: agendamento.id },
+        agendamento_origem: { inicio: { lt: agendamento.inicio } },
+      },
+      orderBy: { data_prevista: 'asc' },
+      select: { id: true, data_prevista: true },
+    });
+    for (const r of candidatos) {
+      if (agendamento.inicio >= fimJanelaRetorno(r.data_prevista)) continue;
+      const { count } = await db.retorno.updateMany({
+        where: { id: r.id, status: { in: STATUS_ABERTOS } },
+        data: { status: 'agendado', agendamento_retorno_id: agendamento.id },
+      });
+      if (count) return r.id;
+    }
+    return null;
+  } catch (e) {
+    console.error(`Retornos: falha ao vincular o agendamento ${agendamento.id}: ${(e as Error).message}`);
+    return null;
+  }
 }
 
 /**

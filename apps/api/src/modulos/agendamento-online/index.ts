@@ -47,6 +47,7 @@ import { autenticarClinica, exigirPapel } from '../../plugins/auth';
 import { assegurarLimite, exigirRecurso } from '../../plugins/recursos';
 import { atualizarConfiguracaoClinica, obterConfiguracaoClinica } from '../../servicos/configuracaoClinica';
 import { enfileirarMensagem, type ResultadoEnfileirar } from '../../servicos/whatsapp/envio';
+import { vincularRetornoAoNovoAgendamento } from '../retornos/servico';
 import {
   textoAgendamentoOnlineConfirmado,
   textoAgendamentoOnlineRecusado,
@@ -461,6 +462,14 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
             select: selecaoSolicitacao,
           });
           return { solicitacao, agendamentoId: ag.id, pacienteId: pid };
+        });
+
+        // Depois do commit: retorno em aberto do paciente com este profissional ⇒ `agendado` (módulo retornos).
+        await vincularRetornoAoNovoAgendamento(request.clinicaId, {
+          id: r.agendamentoId,
+          paciente_id: r.pacienteId,
+          profissional_id: prof.id,
+          inicio: s.inicio,
         });
 
         // Depois do commit: WhatsApp de confirmação (só com o consentimento dado na solicitação).

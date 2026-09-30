@@ -4,7 +4,9 @@
  * Lógica em modulos/admin-cobranca/servico.ts (`executarJobCobrancas`), testável sem Redis:
  *   1. cobranças `pendente` com vencimento < hoje ⇒ `vencida`;
  *   2. gera no gateway ATIVO a cobrança do próximo ciclo das assinaturas com cobrança automática
- *      (gateway + dia_vencimento), até 10 dias antes do vencimento, no máximo uma por mês;
+ *      (gateway + dia_vencimento), até 10 dias antes do vencimento, no máximo uma por mês, no método
+ *      preferido da assinatura (`assinaturas.metodo_cobranca`, se habilitado no gateway) e com a descrição
+ *      `gateways_pagamento.descricao_cobranca`;
  *   3. cobrança em aberto há mais de `dias_tolerancia` dias ⇒ assinatura `ativa` → `vencida`
  *      (volta a `ativa` pelo webhook de pagamento). `bloqueada` fica para bloqueio manual.
  * Sem gateway ativo: só marca vencidas/tolerância e registra no log. Idempotente (pode rodar várias vezes).

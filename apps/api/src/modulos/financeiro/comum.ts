@@ -269,29 +269,6 @@ export async function validarProfissional(db: DbTenant, id: string | null | unde
   );
 }
 
-// ----------------------------------------------------------------------------- marcador de agendamento em títulos
-// `titulos` não tem coluna agendamento_id: o título "a receber do convênio" de uma consulta guarda o vínculo
-// num marcador no fim de `observacoes` (removido nas respostas e exposto como `agendamento_id`).
-
-const MARCADOR = /\s*\[agendamento:([0-9a-f-]{36})\]\s*$/i;
-
-export function marcadorAgendamento(agendamentoId: string) {
-  return `[agendamento:${agendamentoId}]`;
-}
-
-export function separarObservacoes(obs: string | null): { observacoes: string | null; agendamento_id: string | null } {
-  if (!obs) return { observacoes: null, agendamento_id: null };
-  const m = obs.match(MARCADOR);
-  if (!m) return { observacoes: obs, agendamento_id: null };
-  const resto = obs.replace(MARCADOR, '').trim();
-  return { observacoes: resto || null, agendamento_id: m[1]!.toLowerCase() };
-}
-
-export function juntarObservacoes(obs: string | null, agendamentoId: string | null): string | null {
-  if (!agendamentoId) return obs;
-  return obs ? `${obs} ${marcadorAgendamento(agendamentoId)}` : marcadorAgendamento(agendamentoId);
-}
-
 export function ehErroUnico(e: unknown): boolean {
   return e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002';
 }

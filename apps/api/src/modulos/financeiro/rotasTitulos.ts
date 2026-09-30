@@ -18,10 +18,8 @@ import {
   hojeNoFuso,
   instanteDaData,
   intervaloInstantes,
-  juntarObservacoes,
   moeda,
   primeiroDiaMes,
-  separarObservacoes,
   somarMeses,
   ultimoDiaMes,
   validarCategoria,
@@ -272,7 +270,6 @@ const rotas: FastifyPluginAsyncZod = async (app) => {
       if (b.categoria_id !== undefined) await validarCategoria(db, b.categoria_id, atual.tipo);
       if (b.paciente_id !== undefined) await validarPaciente(db, b.paciente_id);
       if (b.profissional_id !== undefined) await validarProfissional(db, b.profissional_id);
-      const vinculo = separarObservacoes(atual.observacoes).agendamento_id;
 
       const r = await db.titulo.updateMany({
         where: { id, status: 'aberto' },
@@ -285,7 +282,7 @@ const rotas: FastifyPluginAsyncZod = async (app) => {
           ...(b.profissional_id !== undefined ? { profissional_id: b.profissional_id } : {}),
           ...(b.fornecedor !== undefined ? { fornecedor: b.fornecedor } : {}),
           ...(b.forma_pagamento !== undefined ? { forma_pagamento: b.forma_pagamento } : {}),
-          ...(b.observacoes !== undefined ? { observacoes: juntarObservacoes(b.observacoes, vinculo) } : {}),
+          ...(b.observacoes !== undefined ? { observacoes: b.observacoes } : {}),
         },
       });
       if (r.count === 0) throw new ErroNegocio(409, 'titulo_nao_aberto', 'Só é possível editar títulos em aberto.');
@@ -328,7 +325,6 @@ const rotas: FastifyPluginAsyncZod = async (app) => {
       if (valorPago.lte(0)) {
         throw new ErroNegocio(400, 'valor_invalido', 'O valor pago deve ser maior que zero.');
       }
-      const agendamentoId = separarObservacoes(titulo.observacoes).agendamento_id;
       const parcela = titulo.parcela_total ? ` (${titulo.parcela_numero}/${titulo.parcela_total})` : '';
 
       const resultado = await db.$transaction(async (tx) => {
@@ -337,9 +333,6 @@ const rotas: FastifyPluginAsyncZod = async (app) => {
           data: { status: 'pago', pago_em: instanteDaData(b.data, fuso), valor_pago: valorPago, forma_pagamento: b.forma_pagamento },
         });
         if (r.count === 0) throw new ErroNegocio(409, 'titulo_nao_aberto', 'Este título não está em aberto.');
-        const agendamento = agendamentoId
-          ? await tx.agendamento.findUnique({ where: { id: agendamentoId }, select: { id: true } })
-          : null;
         const movimentacao = await tx.movimentacaoFinanceira.create({
           data: {
             tipo: titulo.tipo === 'pagar' ? 'saida' : 'entrada',
@@ -352,7 +345,7 @@ const rotas: FastifyPluginAsyncZod = async (app) => {
             descricao: b.descricao ?? `${titulo.descricao}${parcela}`,
             paciente_id: titulo.paciente_id,
             profissional_id: titulo.profissional_id,
-            agendamento_id: agendamento?.id ?? null,
+            agendamento_id: titulo.agendamento_id,
             titulo_id: titulo.id,
             criado_por: request.usuarioClinica!.id,
           },

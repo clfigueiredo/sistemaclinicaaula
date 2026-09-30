@@ -7,7 +7,7 @@
  *     gateways. Assim Pix/boleto/cartão, tolerância, cancelamento e histórico funcionam igual em todos, sem
  *     depender da recorrência nativa de cada um (os adaptadores implementam `criarAssinatura`, mas o fluxo não usa).
  *   - Cobrança automática de uma clínica = `assinaturas.gateway` + `assinaturas.dia_vencimento` preenchidos
- *     (POST /admin/cobranca/clinicas/:id/assinatura). A cobrança do ciclo é gerada até
+ *     (POST /admin/cobranca/clinicas/:id/assinatura; `assinaturas.metodo_cobranca` = método preferido, opcional). A cobrança do ciclo é gerada até
  *     ANTECEDENCIA_GERACAO_DIAS antes do vencimento; nunca mais de uma por mês (qualquer status — uma cobrança
  *     cancelada pelo super admin significa "não cobrar este mês").
  *   - Tolerância: cobrança em aberto (pendente/vencida) há MAIS de `dias_tolerancia` dias do vencimento ⇒
@@ -214,6 +214,10 @@ export async function gerarCobranca(dados: DadosNovaCobranca, hoje = hojeIso()) 
   }
   const descricao =
     dados.descricao?.trim() || montarDescricao(config.opcoes.descricao_cobranca, assinatura.plano.nome, dados.vencimento);
+  // Método: o informado; senão o preferido da assinatura (se ainda habilitado no gateway); senão o cliente escolhe.
+  const metodo =
+    dados.metodo ??
+    (assinatura.metodo_cobranca && config.metodos.includes(assinatura.metodo_cobranca) ? assinatura.metodo_cobranca : undefined);
 
   const clienteExternoId = await garantirCliente(ctx, gateway);
 
@@ -225,7 +229,7 @@ export async function gerarCobranca(dados: DadosNovaCobranca, hoje = hojeIso()) 
       descricao,
       valor,
       vencimento: dataSemHora(dados.vencimento),
-      metodo: dados.metodo ?? null,
+      metodo: metodo ?? null,
       status: 'pendente',
     },
   });
@@ -236,7 +240,7 @@ export async function gerarCobranca(dados: DadosNovaCobranca, hoje = hojeIso()) 
       valor,
       vencimento: dados.vencimento,
       descricao,
-      metodo: dados.metodo,
+      metodo,
       referencia: local.id,
     });
     const atualizada = await prisma.cobranca.update({
@@ -269,19 +273,26 @@ export type DadosCobrancaAutomatica = { clinicaId: string; diaVencimento: number
  * Pode ser chamada por outros módulos (ex.: ao atribuir um plano pago no admin-clinicas).
  */
 export async function ativarCobrancaAutomatica(dados: DadosCobrancaAutomatica, hoje = hojeIso()) {
-  const { gateway } = await exigirGatewayAtivo();
+  const { gateway, config } = await exigirGatewayAtivo();
+  if (dados.metodo && !config.metodos.includes(dados.metodo)) {
+    throw new ErroNegocio(400, 'metodo_nao_permitido', 'Este método de pagamento não está habilitado no gateway ativo.');
+  }
   const ctx = await carregarClinicaParaCobranca(dados.clinicaId);
   if (!(ctx.assinatura.plano.preco.toNumber() > 0)) {
     throw new ErroNegocio(409, 'plano_gratuito', 'O plano da clínica é gratuito: não há o que cobrar.');
   }
   await garantirCliente(ctx, gateway);
-  await prisma.assinatura.update({ where: { id: ctx.assinatura.id }, data: { dia_vencimento: dados.diaVencimento } });
+  await prisma.assinatura.update({
+    where: { id: ctx.assinatura.id },
+    data: { dia_vencimento: dados.diaVencimento, metodo_cobranca: dados.metodo ?? null },
+  });
+  ctx.assinatura.metodo_cobranca = dados.metodo ?? null;
 
   let cobranca: CobrancaSerializada | null = null;
   if (dados.gerarAgora !== false) {
     const vencimento = proximoVencimento(hoje, dados.diaVencimento);
     if (!(await existeCobrancaNoMes(dados.clinicaId, vencimento))) {
-      cobranca = (await gerarCobranca({ clinicaId: dados.clinicaId, vencimento, metodo: dados.metodo }, hoje)) ?? null;
+      cobranca = (await gerarCobranca({ clinicaId: dados.clinicaId, vencimento }, hoje)) ?? null;
     }
   }
   return { assinatura: await resumoAssinatura(dados.clinicaId), cobranca };
@@ -289,7 +300,7 @@ export async function ativarCobrancaAutomatica(dados: DadosCobrancaAutomatica, h
 
 export async function desativarCobrancaAutomatica(clinicaId: string) {
   const { assinatura } = await carregarClinicaParaCobranca(clinicaId);
-  await prisma.assinatura.update({ where: { id: assinatura.id }, data: { dia_vencimento: null } });
+  await prisma.assinatura.update({ where: { id: assinatura.id }, data: { dia_vencimento: null, metodo_cobranca: null } });
   return { assinatura: await resumoAssinatura(clinicaId) };
 }
 
@@ -305,6 +316,7 @@ export async function resumoAssinatura(clinicaId: string) {
     expira_em: a.expira_em,
     gateway: a.gateway,
     dia_vencimento: a.dia_vencimento,
+    metodo_cobranca: a.metodo_cobranca,
     cobranca_automatica: !!(a.gateway && a.dia_vencimento),
     cliente_no_gateway: !!a.cliente_externo_id,
     plano: { id: a.plano.id, nome: a.plano.nome, preco: a.plano.preco.toFixed(2) },

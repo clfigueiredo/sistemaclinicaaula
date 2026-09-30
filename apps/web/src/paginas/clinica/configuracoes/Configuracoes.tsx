@@ -11,6 +11,7 @@ import { formatarData, formatarMoeda, mascararCpfCnpj, mascararTelefone } from '
 import { cn } from '@/lib/utils';
 import DialogoEditarClinica from './DialogoEditarClinica';
 import ConfigAgendamentoOnline from './ConfigAgendamentoOnline';
+import MinhasFaturas from './MinhasFaturas';
 
 function formatarCep(cep: string) {
   return cep.length === 8 ? `${cep.slice(0, 5)}-${cep.slice(5)}` : cep;
@@ -126,6 +127,8 @@ export default function PaginaConfiguracoes() {
           <ConfigAgendamentoOnline />
         </div>
       )}
+      {/* Faturas do sistema (cobrança do SaaS) — some sozinho se a clínica nunca teve cobrança. */}
+      {me.papel === 'admin' && <MinhasFaturas className="mt-6" />}
       {editando && <DialogoEditarClinica clinica={clinica} aoFechar={() => setEditando(false)} />}
     </div>
   );

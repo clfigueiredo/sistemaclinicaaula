@@ -36,6 +36,7 @@ import { z } from 'zod';
 import { addMinutes, differenceInCalendarDays } from 'date-fns';
 import { autenticarClinica, exigirPapel } from '../../plugins/auth';
 import { assegurarLimite } from '../../plugins/recursos';
+import { vincularRetornoAoNovoAgendamento } from '../retornos/servico';
 import { ErroNegocio, erros, ou404 } from '../../utils/erros';
 import {
   STATUS_REMARCAVEIS,
@@ -313,7 +314,14 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
           select: selecaoAgendamento,
         });
       });
-      return reply.status(201).send(criado);
+      // Depois do commit: retorno em aberto do mesmo paciente+profissional (dentro da janela) ⇒ `agendado`.
+      const retornoVinculado = await vincularRetornoAoNovoAgendamento(request.clinicaId, {
+        id: criado.id,
+        paciente_id: paciente.id,
+        profissional_id: prof.id,
+        inicio: b.inicio,
+      });
+      return reply.status(201).send({ ...criado, retorno_vinculado_id: retornoVinculado });
     },
   );
 

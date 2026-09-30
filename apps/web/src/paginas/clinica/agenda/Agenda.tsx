@@ -1,5 +1,7 @@
 // Agenda da clínica (FullCalendar): visão dia/semana/mês, filtro por profissional, bloqueios,
 // criação por clique em horário vazio, detalhes/ações de status e remarcação por arrastar.
+// Parâmetros de URL: ?agendamento=<id> abre o painel; ?novo=1&paciente_id=&profissional_id=&data=YYYY-MM-DD
+// abre o diálogo de novo agendamento já preenchido (usado por Retornos e Lista de espera).
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import FullCalendar from '@fullcalendar/react';
@@ -28,6 +30,7 @@ import {
   type Agendamento,
 } from '@/api/agendamentos';
 import { useMe, usePodeUsar } from '@/api/me';
+import { usePaciente } from '@/api/pacientes';
 import { ROTULOS_STATUS_AGENDAMENTO, type StatusAgendamento } from '@/api/tipos';
 import { AvisoLimite, CabecalhoPagina, Carregando, EstadoVazio, UsoRecurso } from '@/componentes/comum';
 import { Alert, AlertDescription, AlertTitle } from '@/componentes/ui/alert';
@@ -63,6 +66,10 @@ export default function PaginaAgenda() {
   const [dialogo, setDialogo] = useState<{ aberto: boolean; sugestao?: SugestaoNovo | null; edicao?: Agendamento | null }>({
     aberto: false,
   });
+  // ?novo=1&paciente_id=&profissional_id=&data= (pré-preenchimento vindo de outras telas).
+  const pedidoNovo = parametros.get('novo') === '1';
+  const novoPacienteId = pedidoNovo ? (parametros.get('paciente_id') ?? undefined) : undefined;
+  const pacienteDoLink = usePaciente(novoPacienteId);
 
   const profissionais = useProfissionaisAgenda();
   const profissionalId = profissionalFixo ?? (filtroProf === TODOS ? undefined : filtroProf);
@@ -140,6 +147,44 @@ export default function PaginaAgenda() {
   }
 
   const podeCriar = podeAlterar && podeCriarPlano;
+
+  useEffect(() => {
+    if (!pedidoNovo || !me || !profissionais.isSuccess) return;
+    if (novoPacienteId && pacienteDoLink.isLoading) return;
+    const novos = new URLSearchParams(parametros);
+    const profParam = parametros.get('profissional_id');
+    const dataParam = parametros.get('data');
+    for (const k of ['novo', 'paciente_id', 'profissional_id', 'data']) novos.delete(k);
+    setParametros(novos, { replace: true });
+    if (!podeAlterar) return;
+    if (!podeCriarPlano) {
+      toast.error('Limite do plano', { description: mensagemLimite ?? undefined });
+      return;
+    }
+    const profValido = profParam && (profissionais.data ?? []).some((p) => p.id === profParam) ? profParam : undefined;
+    // Data 'YYYY-MM-DD' (dia local, sem hora); datas passadas viram hoje.
+    let inicio: Date | undefined;
+    if (dataParam && /^\d{4}-\d{2}-\d{2}$/.test(dataParam)) {
+      const [a, m, d] = dataParam.split('-').map(Number) as [number, number, number];
+      const dia = new Date(a, m - 1, d);
+      const hoje = new Date();
+      hoje.setHours(0, 0, 0, 0);
+      inicio = dia < hoje ? hoje : dia;
+      calendario.current?.getApi().gotoDate(inicio);
+    }
+    if (profValido && !profissionalFixo) setFiltroProf(profValido);
+    const p = pacienteDoLink.data;
+    setDialogo({
+      aberto: true,
+      edicao: null,
+      sugestao: {
+        profissionalId: profissionalFixo ?? profValido ?? profissionalId,
+        inicio,
+        paciente: p ? { id: p.id, nome: p.nome, convenio_id: p.convenio_id } : null,
+      },
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pedidoNovo, me, profissionais.isSuccess, novoPacienteId, pacienteDoLink.isLoading]);
 
   function abrirNovo(sugestao?: SugestaoNovo) {
     setDialogo({ aberto: true, sugestao: { profissionalId, ...sugestao }, edicao: null });

@@ -351,6 +351,10 @@ describe('financeiro — caixa e estorno', () => {
       observacoes: 'Guia 123',
       forma_pagamento: 'convenio',
     });
+    // Vínculo na coluna titulos.agendamento_id (não mais marcador no texto das observações).
+    const gravado = await prisma.titulo.findUniqueOrThrow({ where: { id: conv.json().id } });
+    expect(gravado.agendamento_id).toBe(A.agConvenio.id);
+    expect(gravado.observacoes).toBe('Guia 123');
     const gc = (await req(A.recepcao, 'GET', `/financeiro/recebimentos/agendamento/${A.agConvenio.id}`)).json();
     expect(gc.titulos).toHaveLength(1);
     expect(gc.total).toBe('0.00');

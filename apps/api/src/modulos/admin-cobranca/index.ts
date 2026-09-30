@@ -19,6 +19,7 @@
  *   GET    /admin/cobranca/clinicas/:clinicaId            cobrança automática da clínica + últimas cobranças
  *   POST   /admin/cobranca/clinicas/:clinicaId/cobrancas  { vencimento, valor?, descricao?, metodo? } (gateway ativo) ⇒ 201
  *   POST   /admin/cobranca/clinicas/:clinicaId/assinatura { dia_vencimento, metodo?, gerar_agora? } liga a cobrança recorrente
+ *                                                          (metodo ⇒ assinaturas.metodo_cobranca, usado pelo worker)
  *   DELETE /admin/cobranca/clinicas/:clinicaId/assinatura desliga a cobrança recorrente (cobranças existentes ficam)
  *   POST   /admin/cobranca/cobrancas/:id/cancelar         cancela no gateway e aqui (pendente/vencida)
  *   GET    /admin/cobranca/eventos?gateway&pagina&por_pagina   webhooks recebidos (diagnóstico)
@@ -40,7 +41,7 @@ import {
   credencialPrincipal,
   NOMES_PROVEDORES,
   obterGateway,
-  OPCOES_GATEWAY_PADRAO,
+  opcoesDoRegistro,
   PROVEDORES_PAGAMENTO,
   separarArmazenado,
   urlWebhook,
@@ -140,7 +141,8 @@ function lerArmazenado(g: RegistroGateway | null | undefined): { json: Credencia
 
 function visaoGateway(p: ProvedorPagamento, g: RegistroGateway | null | undefined) {
   const { json, ilegivel } = lerArmazenado(g);
-  const { credenciais, opcoes } = separarArmazenado(json);
+  const { credenciais } = separarArmazenado(json);
+  const opcoes = opcoesDoRegistro(g);
   return {
     provedor: p,
     nome: NOMES_PROVEDORES[p],
@@ -224,13 +226,8 @@ async function salvarGateway(p: ProvedorPagamento, corpo: CorpoGatewayT) {
     throw new ErroNegocio(400, 'metodo_nao_suportado', 'O Stripe não oferece Pix em faturas: habilite cartão e/ou boleto.');
   }
 
-  const opcoes = {
-    ...OPCOES_GATEWAY_PADRAO,
-    ...(json?.opcoes ?? {}),
-    ...(corpo.dia_vencimento_padrao !== undefined && { dia_vencimento_padrao: corpo.dia_vencimento_padrao }),
-    ...(corpo.descricao_cobranca !== undefined && { descricao_cobranca: corpo.descricao_cobranca }),
-  };
-  const armazenado = { ...cred, provedor: p, opcoes } as CredenciaisArmazenadas;
+  // Só credenciais no JSON cifrado; opções gerais em colunas próprias.
+  const armazenado = { ...cred, provedor: p } as CredenciaisArmazenadas;
   const principal = credencialPrincipal(armazenado);
 
   const dados: Prisma.GatewayPagamentoUncheckedUpdateInput = {
@@ -239,6 +236,8 @@ async function salvarGateway(p: ProvedorPagamento, corpo: CorpoGatewayT) {
     credenciais_final: principal ? finalSegredo(principal) || null : null,
     ...(corpo.dias_tolerancia !== undefined && { dias_tolerancia: corpo.dias_tolerancia }),
     ...(metodos && { metodos }),
+    ...(corpo.dia_vencimento_padrao !== undefined && { dia_vencimento_padrao: corpo.dia_vencimento_padrao }),
+    ...(corpo.descricao_cobranca !== undefined && { descricao_cobranca: corpo.descricao_cobranca }),
     ...(webhookNovo && { segredo_webhook_cifrado: criptografar(webhookNovo), segredo_webhook_final: finalSegredo(webhookNovo) || null }),
     ...(corpo.segredo_webhook === null && { segredo_webhook_cifrado: null, segredo_webhook_final: null }),
   };

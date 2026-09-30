@@ -59,7 +59,7 @@ Sistema_Clinica/
 │       │                     # cripto.ts (AES-256-GCM), slug.ts
 │       ├── servicos/         # filas.ts (BullMQ/Redis), whatsapp/*, pagamentos/* (gateways do SaaS),
 │       │                     # configuracaoClinica.ts, financeiroComum.ts
-│       ├── workers/index.ts  # registro dos workers BullMQ (+ stubs da fase 2)
+│       ├── workers/index.ts  # registro dos workers BullMQ (lembretes, envio + 4 jobs diários da fase 2)
 │       └── modulos/<nome>/index.ts   # um plugin por domínio (registrados em modulos/index.ts)
 └── apps/web/                 # React 19 + Vite + Tailwind 4 + shadcn/ui + TanStack Query + React Router 7
     └── src/
@@ -123,8 +123,10 @@ npm run dev:api | dev:web   # só um dos dois
 npm run dev:worker          # workers em processo separado (use com EXECUTAR_WORKERS=false)
 npm run typecheck           # tsc da API e do Web
 npm run build               # tsup (apps/api/dist) + vite build (apps/web/dist)
-npm test                    # vitest da API (banco clinica_teste, criado automaticamente) — ~11 min no SMB
+npm test                    # vitest da API (banco clinica_teste, criado automaticamente) — ~15 min no SMB
+npx vitest run test/x.test.ts   # (em apps/api, com `npx dotenv -e ../../.env --`) um arquivo só
 npm run e2e                 # smoke test E2E (Playwright, apps/web/e2e/smoke) — exige `npm run dev` rodando
+npm run db:deploy           # aplica migrations sem o `migrate dev` (útil quando ele trava no SMB)
 npm run db:studio           # Prisma Studio
 ```
 
@@ -134,6 +136,11 @@ npm run db:studio           # Prisma Studio
   e triggers vão em SQL manual na própria migration (use `--create-only`, edite e rode `db:migrate` de novo).
   O default de `clinica_id` no schema precisa ser exatamente `dbgenerated("(current_setting('app.clinica_id'::text))::uuid")`
   (forma normalizada pelo Postgres); do contrário o `migrate dev` detecta drift e pede uma migration nova a cada execução.
+  Se o `migrate dev` travar no SMB: gere o SQL com `npx prisma migrate diff --from-url "$DATABASE_URL"
+  --to-schema-datamodel prisma/schema.prisma --script`, grave em `prisma/migrations/<timestamp>_<nome>/migration.sql`,
+  rode `npm run db:deploy` e confira drift com o mesmo `migrate diff ... --exit-code` ("No difference detected").
+- `prisma generate` falha com `EPERM ... query_engine-windows.dll.node` se a API estiver rodando (a DLL fica
+  travada): pare o `npm run dev`, gere e suba de novo.
 - E2E: na primeira vez instale o browser: `cd apps/web && npx playwright install chromium`.
   Screenshots e `relatorio.txt` (erros de console e HTTP 4xx/5xx) em `apps/web/e2e/capturas/` (ignorado no git).
   Na primeira carga o Vite no SMB é lento (1–2 min por página nova) — os timeouts do Playwright já consideram isso.
@@ -163,9 +170,16 @@ de **Teste grátis** (tudo limitado a 1), crie uma clínica nova em `/cadastro`.
   `admin-planos`, `admin-clinicas`, `profissionais` (+ horários e bloqueios), `convenios`, `usuarios`,
   `pacientes` (+ alergias/medicações), `prontuario` (+ anexos), `agendamentos`, `whatsapp` (+ webhook
   `POST /webhooks/whatsapp`). Cada `index.ts` traz no topo as rotas, guards e regras.
-- Módulos da fase 2 do produto (stubs registrados, contrato em `docs/FASE2.md`): `financeiro`,
+- Módulos da fase 2 do produto (implementados, contrato e adições em `docs/FASE2.md`): `financeiro`,
   `agendamento-online` (+ rotas públicas `/publico/clinicas/:slug*`), `lista-espera`, `documentos`, `retornos`,
-  `dashboard`, `admin-cobranca` (+ webhooks `POST /webhooks/pagamentos/:gateway`).
+  `dashboard`, `admin-cobranca` (+ webhooks `POST /webhooks/pagamentos/:gateway` e `GET /cobrancas/minhas`).
+- Integrações entre módulos da fase 2 (sem hooks genéricos — chamadas diretas a serviços exportados):
+  criar agendamento (`POST /agendamentos` e aprovação online) chama `vincularRetornoAoNovoAgendamento`
+  (`modulos/retornos/servico.ts`); trocar para plano pago (`PUT /admin/clinicas/:id/assinatura`) chama
+  `ativarCobrancaAutomatica` (`modulos/admin-cobranca/servico.ts`) se houver gateway ativo. Esses serviços nunca
+  devem fazer a operação principal falhar.
+- Título ↔ consulta: `titulos.agendamento_id` (FK). Opções do gateway em colunas
+  (`gateways_pagamento.dia_vencimento_padrao`, `descricao_cobranca`); o JSON cifrado guarda só credenciais.
 - Criar agendamento fora do módulo agendamentos (ex.: aprovação do agendamento online): na mesma transação,
   `assegurarLimite('max_agendamentos', { tx })` + `travarAgendaProfissional` + `validarHorario`
   (`modulos/agendamentos/servico.ts`). Fora do HTTP, `criarDbTenant(clinicaId)` dá o client com escopo.
@@ -349,6 +363,12 @@ await request.db.$transaction(async (tx) => {
   tokens (`bg-primary`, `text-muted-foreground`, `bg-success`, `bg-warning`, `bg-destructive`).
 - **Agenda**: FullCalendar 6 (`@fullcalendar/react`, `core`, `daygrid`, `timegrid`, `interaction`;
   locale `@fullcalendar/core/locales/pt-br`). As variáveis CSS do FullCalendar já seguem o tema em `index.css`.
+  Links para a agenda: `/agenda?agendamento=<id>` (abre o painel) e
+  `/agenda?novo=1&paciente_id=&profissional_id=&data=YYYY-MM-DD` (abre o diálogo de novo agendamento preenchido).
+- **Fase 2 no front**: pontos de extensão no painel da agenda (`RecebimentoConsulta`, `DefinirRetorno`,
+  `SugestoesListaEspera`), na ficha do paciente (`AbaDocumentos`), em Configurações (`ConfigAgendamentoOnline`,
+  `MinhasFaturas`) e no detalhe da clínica do super admin (`BlocoCobrancaClinica`) — mapa completo em
+  `docs/FASE2.md` §10. Gráficos do dashboard e dos relatórios são SVG/CSS próprios (sem biblioteca de gráficos).
 
 ## Status atual
 
@@ -377,5 +397,10 @@ await request.db.$transaction(async (tx) => {
       documentos, slugs, recursos novos), seed, envs (`CHAVE_CRIPTOGRAFIA`, `API_URL_PUBLICA`, `WEB_URL_PUBLICA`),
       `utils/cripto.ts` + `utils/slug.ts`, stubs de módulos/workers/gateways, rotas/menus/stubs do web,
       contratos em `docs/FASE2.md`, testes em `apps/api/test/fase2.test.ts`
-- [ ] Fase 2 do produto — **em andamento**: implementar os módulos `financeiro`, `agendamento-online`,
-      `lista-espera`, `documentos`, `retornos`, `dashboard` e `admin-cobranca` seguindo `docs/FASE2.md`
+- [x] Fase 2 do produto — **concluída**: módulos `financeiro`, `agendamento-online`, `lista-espera`,
+      `documentos`, `retornos`, `dashboard` e `admin-cobranca` (+ workers diários e adaptadores Asaas/Stripe/
+      Mercado Pago) implementados em paralelo e integrados: migration `ajustes_fase2` (`titulos.agendamento_id`,
+      opções do gateway em colunas, `assinaturas.metodo_cobranca`), cobrança automática ao atribuir plano pago,
+      faturas em Configurações, bloco de cobrança no detalhe da clínica, agenda pré-preenchida por URL, retorno
+      marcado como agendado na criação do agendamento, QA E2E dos fluxos novos (`apps/web/e2e/smoke/05-*` a `08-*`)
+- [ ] Pendente: testar a cobrança com um gateway real em sandbox + túnel (passo a passo em `docs/SETUP_LOCAL.md`)
