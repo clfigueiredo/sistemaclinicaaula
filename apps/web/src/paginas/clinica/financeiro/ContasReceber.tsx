@@ -1,14 +1,6 @@
-// [STUB — fase 2] DONO: módulo `financeiro`. Contrato: docs/FASE2.md §1. Aba "Contas a receber" de /financeiro
-// (renderizada dentro do LayoutFinanceiro). Hooks em src/api/financeiro.ts.
-import { Construction } from 'lucide-react';
-import { EstadoVazio } from '@/componentes/comum';
+// Aba "Contas a receber" de /financeiro (títulos do tipo `receber`). DONO: módulo financeiro.
+import { Titulos } from './Titulos';
 
 export default function Pagina() {
-  return (
-    <EstadoVazio
-      icone={<Construction className="size-5" />}
-      titulo="Contas a receber — em construção"
-      descricao="Títulos a receber (parcelas, mensalidades, baixa)."
-    />
-  );
+  return <Titulos tipo="receber" />;
 }

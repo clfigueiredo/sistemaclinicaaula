@@ -1,5 +1,5 @@
 /**
- * Worker da fila NOMES_FILAS.FINANCEIRO_RECORRENCIAS + agendamento do job diário (06:00).   [STUB — fase 2]
+ * Worker da fila NOMES_FILAS.FINANCEIRO_RECORRENCIAS + agendamento do job diário (06:00).
  *
  * DONO: módulo `financeiro` (docs/FASE2.md). Já registrado em workers/index.ts — o dono só implementa
  * `processarRecorrencias` (e ajusta o CRON se precisar). Use o prisma CRU filtrando clinica_id manualmente (ou
@@ -14,7 +14,12 @@
  */
 import type { Job } from 'bullmq';
 import { env } from '../config/env';
+import { prisma } from '../lib/prisma';
+import { assegurarRecurso, assinaturaEstaAtiva } from '../plugins/recursos';
+import { criarDbTenant } from '../plugins/tenant';
 import { criarWorker, NOMES_FILAS, obterFila, type JobPorClinica } from '../servicos/filas';
+import { hojeNoFuso } from '../servicos/financeiroComum';
+import { gerarTitulosRecorrencia } from '../modulos/financeiro/servico';
 
 export const CRON_RECORRENCIAS = '0 6 * * *';
 export const ID_AGENDADOR_RECORRENCIAS = 'financeiro-recorrencias-diario';
@@ -27,9 +32,43 @@ export async function agendarJobDiarioRecorrencias(): Promise<void> {
   );
 }
 
-/** TODO(financeiro): implementar. Retorne um resumo (vai para o log do BullMQ). */
-export async function processarRecorrencias(_dados: JobPorClinica): Promise<{ processadas: number }> {
-  return { processadas: 0 };
+/**
+ * Para cada clínica com recorrências ativas (ou só `dados.clinicaId`), com assinatura ativa e recurso
+ * `financeiro` habilitado, garante os títulos do mês corrente (se o vencimento não passou) e do próximo.
+ * `dados.data` ('YYYY-MM-DD') substitui "hoje" (testes/reprocessamento). Idempotente.
+ */
+export async function processarRecorrencias(
+  dados: JobPorClinica = {},
+): Promise<{ processadas: number; titulosGerados: number; clinicas: number; ignoradas: number }> {
+  const clinicas = await prisma.recorrencia.findMany({
+    where: { ativo: true, ...(dados.clinicaId ? { clinica_id: dados.clinicaId } : {}) },
+    distinct: ['clinica_id'],
+    select: { clinica_id: true, clinica: { select: { fuso_horario: true, status: true } } },
+  });
+
+  let processadas = 0;
+  let titulosGerados = 0;
+  let ignoradas = 0;
+  for (const c of clinicas) {
+    if (c.clinica.status !== 'ativa' || !(await assinaturaEstaAtiva(c.clinica_id))) {
+      ignoradas++;
+      continue;
+    }
+    try {
+      await assegurarRecurso(c.clinica_id, 'financeiro');
+    } catch {
+      ignoradas++;
+      continue;
+    }
+    const hoje = dados.data && /^\d{4}-\d{2}-\d{2}$/.test(dados.data) ? dados.data : hojeNoFuso(c.clinica.fuso_horario);
+    const db = criarDbTenant(c.clinica_id);
+    const recorrencias = await db.recorrencia.findMany({ where: { ativo: true } });
+    for (const rec of recorrencias) {
+      titulosGerados += await gerarTitulosRecorrencia(db, rec, hoje);
+      processadas++;
+    }
+  }
+  return { processadas, titulosGerados, clinicas: clinicas.length, ignoradas };
 }
 
 export function iniciarWorkerDiarioRecorrencias() {

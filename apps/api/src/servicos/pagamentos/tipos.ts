@@ -23,6 +23,25 @@ export type CredenciaisGateway =
   | { provedor: 'stripe'; secret_key: string; publishable_key?: string }
   | { provedor: 'mercado_pago'; access_token: string; public_key?: string };
 
+/**
+ * Opções gerais do gateway que NÃO têm coluna própria no schema (congelado): gravadas junto das
+ * credenciais no JSON cifrado (`credenciais_cifradas.opcoes`). Não são segredo — só moram ali.
+ */
+export type OpcoesGateway = {
+  /** Dia do mês (1–28) sugerido ao ativar a cobrança recorrente de uma clínica. */
+  dia_vencimento_padrao: number;
+  /** Texto da descrição da cobrança. `{plano}` e `{competencia}` (MM/AAAA) são substituídos. */
+  descricao_cobranca: string;
+};
+
+export const OPCOES_GATEWAY_PADRAO: OpcoesGateway = {
+  dia_vencimento_padrao: 10,
+  descricao_cobranca: 'Mensalidade do sistema — plano {plano} ({competencia})',
+};
+
+/** O que fica no JSON cifrado: credenciais + opções gerais. */
+export type CredenciaisArmazenadas = CredenciaisGateway & { opcoes?: Partial<OpcoesGateway> };
+
 export type ConfigGateway = {
   provedor: ProvedorPagamento;
   ambiente: AmbienteGateway;
@@ -30,7 +49,12 @@ export type ConfigGateway = {
   /** Segredo de validação de webhook (decifrado), se o provedor usar. */
   segredoWebhook: string | null;
   metodos: MetodoCobranca[];
+  /** Dias após o vencimento antes de a assinatura virar `vencida`. */
+  diasTolerancia: number;
+  opcoes: OpcoesGateway;
 };
+
+export type ResultadoTesteConexao = { ok: boolean; mensagem: string };
 
 export type DadosCliente = {
   clinicaId: string;
@@ -111,6 +135,8 @@ export class ErroGatewayPagamento extends Error {
 /** Contrato que cada adaptador implementa. */
 export interface GatewayPagamento {
   readonly provedor: ProvedorPagamento;
+  /** Chamada leve e sem efeitos colaterais para conferir credenciais/ambiente. Nunca lança. */
+  testarConexao(): Promise<ResultadoTesteConexao>;
   /** Cria (ou reaproveita) o cliente no gateway. Retorna o ID externo (assinaturas.cliente_externo_id). */
   criarCliente(dados: DadosCliente): Promise<{ clienteExternoId: string }>;
   /** Assinatura recorrente gerenciada pelo gateway (assinaturas.assinatura_externa_id). */
@@ -122,5 +148,5 @@ export interface GatewayPagamento {
   /** Valida autenticidade do webhook (token/HMAC). false ⇒ a rota responde 401 e não processa. */
   validarWebhook(req: RequisicaoWebhook): Promise<boolean> | boolean;
   /** Normaliza o webhook. null ⇒ evento irrelevante (responde 200 e ignora). */
-  interpretarWebhook(req: RequisicaoWebhook): EventoPagamento | null;
+  interpretarWebhook(req: RequisicaoWebhook): EventoPagamento | null | Promise<EventoPagamento | null>;
 }

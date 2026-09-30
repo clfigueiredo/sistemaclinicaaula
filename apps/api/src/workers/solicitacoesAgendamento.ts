@@ -1,5 +1,5 @@
 /**
- * Worker da fila NOMES_FILAS.SOLICITACOES_AGENDAMENTO + agendamento do job de hora em hora.   [STUB — fase 2]
+ * Worker da fila NOMES_FILAS.SOLICITACOES_AGENDAMENTO + agendamento do job de hora em hora.
  *
  * DONO: módulo `agendamento-online` (docs/FASE2.md). Já registrado em workers/index.ts — o dono só implementa
  * `expirarSolicitacoes` (e ajusta o CRON se precisar). Use o prisma CRU filtrando clinica_id manualmente (ou
@@ -12,6 +12,7 @@
  */
 import type { Job } from 'bullmq';
 import { env } from '../config/env';
+import { expirarSolicitacoesPendentes } from '../modulos/agendamento-online/servico';
 import { criarWorker, NOMES_FILAS, obterFila, type JobPorClinica } from '../servicos/filas';
 
 export const CRON_SOLICITACOES = '15 * * * *';
@@ -25,9 +26,9 @@ export async function agendarJobExpirarSolicitacoes(): Promise<void> {
   );
 }
 
-/** TODO(agendamento-online): implementar. Retorne um resumo (vai para o log do BullMQ). */
-export async function expirarSolicitacoes(_dados: JobPorClinica): Promise<{ processadas: number }> {
-  return { processadas: 0 };
+/** Expira as solicitações pendentes cujo horário já passou. Resumo vai para o log do BullMQ. */
+export async function expirarSolicitacoes(dados: JobPorClinica): Promise<{ processadas: number }> {
+  return expirarSolicitacoesPendentes({ clinicaId: dados.clinicaId });
 }
 
 export function iniciarWorkerExpirarSolicitacoes() {

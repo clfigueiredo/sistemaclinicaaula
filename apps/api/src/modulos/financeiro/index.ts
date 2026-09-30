@@ -1,5 +1,5 @@
 /**
- * Módulo financeiro — caixa, contas a pagar/receber, recorrências, repasses e relatórios.   [STUB — fase 2]
+ * Módulo financeiro — caixa, contas a pagar/receber, recorrências, repasses e relatórios.
  *
  * Contrato completo (payloads, respostas, chaves do front): docs/FASE2.md §1.
  * Recurso do plano: `financeiro` (exigirRecurso em TODAS as rotas). Tabelas: contas_financeiras,
@@ -43,18 +43,48 @@
  *   - Valide TODAS as FKs do body pelo request.db (conta, categoria, paciente, profissional, agendamento, título).
  *   - Recepção: não acessa relatórios, recorrências, repasses nem configura contas/categorias.
  *   - Profissional: só /repasses (dele) e /meus-recebimentos.
- *   - Worker: workers/recorrenciasFinanceiras.ts (fila FINANCEIRO_RECORRENCIAS) — implementar `processarRecorrencias`.
+ *   - Worker: workers/recorrenciasFinanceiras.ts (fila FINANCEIRO_RECORRENCIAS) — `processarRecorrencias`.
+ *
+ * Rotas adicionais (além do contrato):
+ *   PUT    /financeiro/movimentacoes/:id              admin             só descricao/categoria_id (valor/tipo/data/conta são imutáveis)
+ *   POST   /financeiro/recebimentos/convenio          admin, recepção   consulta de convênio ⇒ título A RECEBER (fornecedor = convênio)
+ *                                                                        vinculado ao agendamento por marcador em `observacoes`
+ *   GET    /financeiro/titulos/:id                    admin, recepção
+ *   GET    /financeiro/repasses/entradas?inicio&fim&profissional_id   admin; profissional (forçado ao próprio)
+ *   GET    /financeiro/relatorios/exportar?tipo=movimentacoes|categorias|formas|profissionais|fluxo|repasses&inicio&fim   admin (CSV)
+ *   GET    /financeiro/relatorios/fluxo-caixa aceita `agrupamento=dia|mes`.
+ *   GET    /financeiro/titulos: status = aberto | a_vencer | vencido | pago | cancelado; + totais { a_vencer, vencidos, pagos_periodo }.
+ *
+ * Decisões:
+ *   - Lançamento/recebimento/baixa com data futura ⇒ 400 `data_futura` (futuro é título). Conta desativada ⇒ 409 `conta_inativa`.
+ *   - Categoria incompatível com o tipo (entrada↔receita, saída↔despesa) ⇒ 400 `categoria_incompativel`.
+ *   - Estorno: data = hoje; copia vínculos (conta, categoria, paciente, profissional, agendamento, título, período de repasse).
+ *   - Totais de /movimentacoes são EFETIVOS (pares original+estorno somem); saldo de conta soma tudo.
+ *   - Baixa: valor_pago = valor + juros − desconto (ou `valor_pago` explícito). Título do convênio baixado ⇒ entrada
+ *     herda agendamento/paciente/profissional (entra no repasse).
+ *   - Repasse: pagamento acima do saldo é permitido (adiantamento); a tela avisa.
  */
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { autenticarClinica } from '../../plugins/auth';
 import { exigirRecurso } from '../../plugins/recursos';
+import rotasCadastros from './rotasCadastros';
+import rotasMovimentacoes from './rotasMovimentacoes';
+import rotasRecorrencias from './rotasRecorrencias';
+import rotasRelatorios from './rotasRelatorios';
+import rotasRepasses from './rotasRepasses';
+import rotasTitulos from './rotasTitulos';
 
 export const prefixo = '/financeiro';
 
 const modulo: FastifyPluginAsyncZod = async (app) => {
   app.addHook('onRequest', autenticarClinica);
   app.addHook('preHandler', exigirRecurso('financeiro'));
-  // TODO(financeiro): implementar as rotas acima (arquivos auxiliares nesta pasta).
+  await app.register(rotasCadastros);
+  await app.register(rotasMovimentacoes);
+  await app.register(rotasTitulos);
+  await app.register(rotasRecorrencias);
+  await app.register(rotasRepasses);
+  await app.register(rotasRelatorios);
 };
 
 export default modulo;

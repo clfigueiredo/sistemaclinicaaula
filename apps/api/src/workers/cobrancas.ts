@@ -1,18 +1,18 @@
 /**
- * Worker da fila NOMES_FILAS.COBRANCAS + agendamento do job diário (07:00).   [STUB — fase 2]
+ * Worker da fila NOMES_FILAS.COBRANCAS + agendamento do job diário (07:00).   [fase 2, dono: admin-cobranca]
  *
- * DONO: módulo `admin-cobranca` (docs/FASE2.md). Já registrado em workers/index.ts — o dono só implementa
- * `processarCobrancas` (e ajusta o CRON se precisar). Dados de PLATAFORMA: use o prisma CRU (cobrancas,
- * assinaturas, gateways_pagamento). Idempotente: o job pode rodar mais de uma vez no mesmo dia.
- *
- * O que fazer:
- *   - Cobranças `pendente` com vencimento < hoje ⇒ `vencida`.
- *   - Assinatura com cobrança vencida há mais de `gateways_pagamento.dias_tolerancia` dias (gateway ativo)
- *     ⇒ assinatura `vencida` (ou `bloqueada`, decisão documentada no módulo). Paga ⇒ `ativa` é feito pelo webhook.
- *   - (Opcional) gerar a cobrança do próximo ciclo quando o gateway não gerencia a recorrência.
+ * Lógica em modulos/admin-cobranca/servico.ts (`executarJobCobrancas`), testável sem Redis:
+ *   1. cobranças `pendente` com vencimento < hoje ⇒ `vencida`;
+ *   2. gera no gateway ATIVO a cobrança do próximo ciclo das assinaturas com cobrança automática
+ *      (gateway + dia_vencimento), até 10 dias antes do vencimento, no máximo uma por mês;
+ *   3. cobrança em aberto há mais de `dias_tolerancia` dias ⇒ assinatura `ativa` → `vencida`
+ *      (volta a `ativa` pelo webhook de pagamento). `bloqueada` fica para bloqueio manual.
+ * Sem gateway ativo: só marca vencidas/tolerância e registra no log. Idempotente (pode rodar várias vezes).
+ * `dados.data` ('YYYY-MM-DD') simula o dia (testes/reprocessamento); padrão = hoje em TZ_PADRAO.
  */
 import type { Job } from 'bullmq';
 import { env } from '../config/env';
+import { executarJobCobrancas, type ResumoJobCobrancas } from '../modulos/admin-cobranca/servico';
 import { criarWorker, NOMES_FILAS, obterFila, type JobCobrancas } from '../servicos/filas';
 
 export const CRON_COBRANCAS = '0 7 * * *';
@@ -26,9 +26,10 @@ export async function agendarJobDiarioCobrancas(): Promise<void> {
   );
 }
 
-/** TODO(admin-cobranca): implementar. Retorne um resumo (vai para o log do BullMQ). */
-export async function processarCobrancas(_dados: JobCobrancas): Promise<{ processadas: number }> {
-  return { processadas: 0 };
+/** Resumo vai para o retorno do job (log do BullMQ). */
+export async function processarCobrancas(dados: JobCobrancas): Promise<ResumoJobCobrancas> {
+  const hoje = dados.data && /^\d{4}-\d{2}-\d{2}$/.test(dados.data) ? dados.data : undefined;
+  return executarJobCobrancas(hoje);
 }
 
 export function iniciarWorkerDiarioCobrancas() {
