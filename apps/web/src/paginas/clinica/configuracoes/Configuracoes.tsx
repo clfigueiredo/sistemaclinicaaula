@@ -1,15 +1,23 @@
-// Configurações da clínica: dados da clínica e plano/uso dos recursos (somente leitura por enquanto).
-// TODO(fase 2): edição dos dados da clínica (request.db.clinica.update permite a própria clínica).
+// Configurações da clínica: dados cadastrais (editáveis pelo admin) e plano/uso dos recursos.
+import { useState } from 'react';
+import { Pencil } from 'lucide-react';
 import { useMe } from '@/api/me';
 import { ROTULOS_STATUS_ASSINATURA } from '@/api/tipos';
 import { CabecalhoPagina, Carregando } from '@/componentes/comum';
 import { Badge } from '@/componentes/ui/badge';
+import { Button } from '@/componentes/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/componentes/ui/card';
 import { formatarData, formatarMoeda, mascararCpfCnpj, mascararTelefone } from '@/lib/formatos';
 import { cn } from '@/lib/utils';
+import DialogoEditarClinica from './DialogoEditarClinica';
+
+function formatarCep(cep: string) {
+  return cep.length === 8 ? `${cep.slice(0, 5)}-${cep.slice(5)}` : cep;
+}
 
 export default function PaginaConfiguracoes() {
   const { data: me } = useMe();
+  const [editando, setEditando] = useState(false);
   if (!me) return <Carregando />;
   const { clinica, plano, assinatura, recursos } = me;
   const lista = Object.entries(recursos);
@@ -20,8 +28,18 @@ export default function PaginaConfiguracoes() {
       <div className="grid gap-6 lg:grid-cols-5">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Clínica</CardTitle>
-            <CardDescription>Dados cadastrais</CardDescription>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <CardTitle>Clínica</CardTitle>
+                <CardDescription>Dados cadastrais</CardDescription>
+              </div>
+              {me.papel === 'admin' && (
+                <Button variant="outline" size="sm" onClick={() => setEditando(true)}>
+                  <Pencil className="size-4" />
+                  Editar
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             <dl className="space-y-3 text-sm">
@@ -31,6 +49,13 @@ export default function PaginaConfiguracoes() {
                 ['Responsável', clinica.responsavel ?? '—'],
                 ['E-mail', clinica.email ?? '—'],
                 ['Telefone', clinica.telefone ? mascararTelefone(clinica.telefone) : '—'],
+                ['Endereço', clinica.endereco ?? '—'],
+                [
+                  'Cidade/UF',
+                  clinica.cidade || clinica.uf ? [clinica.cidade, clinica.uf].filter(Boolean).join(' / ') : '—',
+                ],
+                ['CEP', clinica.cep ? formatarCep(clinica.cep) : '—'],
+                ['Fuso horário', clinica.fuso_horario.replace('America/', '').replace('_', ' ')],
               ].map(([rotulo, valor]) => (
                 <div key={rotulo} className="grid grid-cols-3 gap-2">
                   <dt className="text-muted-foreground">{rotulo}</dt>
@@ -94,6 +119,7 @@ export default function PaginaConfiguracoes() {
           </CardContent>
         </Card>
       </div>
+      {editando && <DialogoEditarClinica clinica={clinica} aoFechar={() => setEditando(false)} />}
     </div>
   );
 }

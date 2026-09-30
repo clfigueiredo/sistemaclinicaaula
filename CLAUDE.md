@@ -154,7 +154,8 @@ de **Teste grátis** (tudo limitado a 1), crie uma clínica nova em `/cadastro`.
   `default` (plugin `FastifyPluginAsyncZod`) e `prefixo`. **Todos já estão registrados** em
   `src/modulos/index.ts` (só mexa ao criar um módulo novo). Crie arquivos auxiliares na própria pasta
   (`rotas.ts`, `servico.ts`, `esquemas.ts`…).
-- Módulos (todos implementados): `auth`, `me` (+ `GET /me/onboarding`), `admin-planos`, `admin-clinicas`,
+- Módulos (todos implementados): `auth`, `me` (+ `GET /me/onboarding` e `PUT /me/clinica` — admin edita os
+  dados cadastrais da própria clínica; documento e status só pelo super admin), `admin-planos`, `admin-clinicas`,
   `profissionais` (+ horários e bloqueios), `convenios`, `usuarios`, `pacientes` (+ alergias/medicações),
   `prontuario` (+ anexos), `agendamentos`, `whatsapp` (+ webhook `POST /webhooks/whatsapp`). Cada
   `index.ts` traz no topo as rotas, guards e regras.

@@ -2,7 +2,7 @@
  * Sessão atual: useMe() (clínica), useAdminMe() (super admin) e usePodeUsar(codigo) para a UX
  * dos limites do plano. Lembrete: esconder/desabilitar botão é só UX — o backend também bloqueia.
  */
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './cliente';
 import type { AdminMe, CodigoRecurso, Me } from './tipos';
 import { useAuth } from '@/contextos/AuthContext';
@@ -33,6 +33,19 @@ export function useOnboarding() {
     queryKey: chavesMe.onboarding,
     queryFn: () => api.get<ProgressoOnboarding>('/me/onboarding'),
     enabled: !!tokenClinica,
+  });
+}
+
+export type DadosClinica = Partial<
+  Pick<Me['clinica'], 'nome' | 'responsavel' | 'email' | 'telefone' | 'endereco' | 'cidade' | 'uf' | 'cep' | 'fuso_horario'>
+>;
+
+/** Edita os dados cadastrais da própria clínica (somente admin). */
+export function useEditarClinica() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (dados: DadosClinica) => api.put<Me['clinica']>('/me/clinica', dados),
+    onSuccess: () => qc.invalidateQueries({ queryKey: chavesMe.me }),
   });
 }
 
