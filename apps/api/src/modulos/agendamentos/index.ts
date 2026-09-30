@@ -13,7 +13,8 @@
  *   GET    /agendamentos/:id
  *   POST   /agendamentos            admin, recepção; profissional só na própria agenda.
  *            Consome max_agendamentos (assegurarLimite com tx, na mesma transação do conflito).
- *   PUT    /agendamentos/:id        editar/remarcar (mesmas validações; não consome limite)
+ *   PUT    /agendamentos/:id        editar/remarcar (mesmas validações; não consome limite). Trocar `paciente_id`:
+ *            só em agendado/confirmado (409) e NUNCA pelo papel profissional (403 troca_paciente_proibida).
  *   PATCH  /agendamentos/:id/status { status, motivo? }
  *            agendado → confirmado|compareceu|cancelado|faltou; confirmado → compareceu|cancelado|faltou;
  *            compareceu → atendido. Demais ⇒ 409 transicao_invalida. Cancelar grava
@@ -366,6 +367,22 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
 
       const dados: Prisma.AgendamentoUncheckedUpdateInput = {};
       if (b.paciente_id && b.paciente_id !== atual.paciente_id) {
+        // Trocar o paciente pode criar vínculo profissional–paciente (acesso ao prontuário) e deixar
+        // registros de prontuário apontando para o paciente errado: nunca pelo profissional e só antes do atendimento.
+        if (request.usuarioClinica!.papel === 'profissional') {
+          throw new ErroNegocio(
+            403,
+            'troca_paciente_proibida',
+            'O profissional não pode trocar o paciente de um agendamento. Peça à recepção ou cancele e crie outro.',
+          );
+        }
+        if (!STATUS_REMARCAVEIS.includes(atual.status)) {
+          throw new ErroNegocio(
+            409,
+            'troca_paciente_proibida',
+            'Só é possível trocar o paciente de agendamentos com status agendado ou confirmado.',
+          );
+        }
         const pac = ou404(await request.db.paciente.findUnique({ where: { id: b.paciente_id } }), 'Paciente não encontrado.');
         if (!pac.ativo) throw erros.invalido('Este paciente está inativo.', 'paciente_inativo');
         dados.paciente_id = pac.id;

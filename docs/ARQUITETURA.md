@@ -42,7 +42,7 @@ Dois ambientes dentro do mesmo app React:
 | Código | Tipo | Conta o quê |
 |---|---|---|
 | `max_profissionais` | limite | profissionais ativos |
-| `max_recepcionistas` | limite | usuários com papel recepção (admin **não** conta) |
+| `max_recepcionistas` | limite | "usuários de equipe": recepções ativas + admins ativos **adicionais** (só o admin principal — o ativo mais antigo, normalmente o do auto-cadastro — **não** conta) |
 | `max_agendamentos` | limite | agendamentos criados |
 | `max_anexos` | limite | arquivos de exame anexados |
 | `whatsapp` | liga/desliga | permite conectar número |
@@ -76,7 +76,10 @@ Planos pagos normalmente usam `mensal` para agendamentos e mensagens.
 
 - Backend: `exigirRecurso('codigo')` e `verificarLimite('codigo')` antes da ação. Estourou → HTTP 403 com mensagem de upgrade.
 - Frontend: endpoint `/me` devolve recursos e uso atual; menus e botões se adaptam.
-- Assinatura com status `teste | ativa | vencida | cancelada | bloqueada`. Vencida/bloqueada → acesso somente leitura.
+- Assinatura com status `teste | ativa | vencida | cancelada | bloqueada`. Vencida/cancelada/bloqueada → acesso somente leitura
+  (HTTP) e **nada de WhatsApp**: o job de lembretes pula a clínica, o enfileiramento e o worker marcam a
+  mensagem como `falhou/assinatura_inativa` e a resposta do paciente é gravada, mas não altera o agendamento
+  nem é respondida (`assegurarAssinaturaAtiva` em `plugins/recursos.ts`).
 - Assinatura em `teste` não expira (`expira_em = null`); a conversão acontece quando a clínica bate os limites e faz upgrade.
 
 ## 5. Auto-cadastro (teste grátis)
@@ -91,10 +94,22 @@ Planos pagos normalmente usam `mensal` para agendamentos e mensagens.
 |---|---|
 | admin | tudo na clínica, inclusive usuários, convênios e WhatsApp |
 | recepcao | pacientes (dados cadastrais), agenda, convênios — **não vê prontuário** |
-| profissional | sua agenda e prontuário dos seus pacientes |
+| profissional | sua agenda e prontuário/alergias/medicações dos seus pacientes (regra de vínculo abaixo) |
 
 Um usuário `admin` pode estar vinculado a um profissional (dono que também atende).
-O `admin` criado no cadastro **não conta** no limite de recepcionistas.
+O admin principal (criado no cadastro) **não conta** no limite de usuários de equipe; admins adicionais
+ativos contam junto com a recepção (criar/reativar/promover a admin passa por `assegurarLimite`).
+
+**Vínculo profissional–paciente** (`modulos/prontuario/acesso.ts`) — o profissional só acessa prontuário,
+anexos, alergias e medicações do paciente se:
+1. existe registro de prontuário dele para o paciente; ou
+2. existe agendamento dele com o paciente, não cancelado, **criado por outro usuário** (recepção/admin); ou
+3. existe agendamento dele com o paciente com status `compareceu`/`atendido` e início já alcançado.
+
+Agendamentos que o próprio profissional cria só valem depois do atendimento; ele não pode trocar o
+paciente de um agendamento (`PUT /agendamentos/:id` ⇒ 403) e ninguém troca o paciente depois de
+`agendado`/`confirmado`. Usuário vinculado a profissional **inativo** não lê nem escreve prontuário (403
+`profissional_inativo`). O admin lê tudo e só escreve registro se vinculado a profissional ativo.
 
 ## 7. Modelo de dados
 
@@ -107,7 +122,7 @@ O `admin` criado no cadastro **não conta** no limite de recepcionistas.
 
 ### Clínica (todas com `clinica_id`)
 
-- `usuarios` — nome, e-mail, senha_hash, papel, profissional_id (opcional), ativo
+- `usuarios` — nome, e-mail, senha_hash, papel, profissional_id (opcional), ativo, senha_alterada_em
 - `profissionais` — nome, especialidade, registro (CRM/CRO/CRP…), duracao_consulta_min, cor_agenda, ativo
 - `profissional_horarios` — profissional_id, dia_semana, hora_inicio, hora_fim
 - `bloqueios_agenda` — profissional_id (null = clínica toda), inicio, fim, motivo
@@ -142,8 +157,11 @@ O contrato inicial previa `GET /bloqueios`; ficou assim (sem alias):
 - Consentimento de WhatsApp no cadastro do paciente.
 - Log de acesso a prontuário.
 - Prontuário imutável (só acréscimo).
-- Backup diário do Postgres.
-- Senhas com bcrypt/argon2; HTTPS em produção.
+- Backup diário do Postgres (`deploy/backup.sh`, ver `docs/DEPLOY.md`).
+- Senhas com bcrypt/argon2; HTTPS em produção (Caddy).
+- Troca da própria senha exige a senha atual; qualquer troca/redefinição invalida os tokens anteriores
+  do usuário (`usuarios.senha_alterada_em` × `iat` do JWT).
+- Login com e-mail inexistente roda bcrypt contra um hash falso (sem enumeração por tempo).
 
 ## 10. Fases
 

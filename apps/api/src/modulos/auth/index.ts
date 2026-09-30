@@ -10,7 +10,8 @@
  *        → 201 { token, usuario, clinica }. Cria em UMA transação: clínica + usuário admin +
  *        assinatura (status 'teste', expira_em null) no plano marcado como plano_cadastro.
  *
- * Rate limit: 10 tentativas/minuto por IP nas rotas de login e 5/minuto no cadastro.
+ * Rate limit: 10 tentativas/minuto por IP nas rotas de login e 5/minuto no cadastro (IP real só com
+ * TRUST_PROXY configurado atrás do proxy). E-mail inexistente roda bcrypt contra HASH_FALSO (timing).
  */
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -18,7 +19,7 @@ import { prisma } from '../../lib/prisma';
 import { assinarTokenClinica, assinarTokenPlataforma } from '../../plugins/auth';
 import { ErroNegocio } from '../../utils/erros';
 import { somenteDigitos, validarCpfOuCnpj } from '../../utils/documento';
-import { conferirSenha, gerarHashSenha } from '../../utils/senha';
+import { conferirSenha, conferirSenhaFalsa, gerarHashSenha } from '../../utils/senha';
 
 export const prefixo = '/auth';
 
@@ -45,7 +46,9 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const { email, senha } = request.body;
       const admin = await prisma.usuarioPlataforma.findUnique({ where: { email } });
-      if (!admin || !admin.ativo || !(await conferirSenha(senha, admin.senha_hash))) throw erroCredenciais();
+      // E-mail inexistente também roda um bcrypt (hash falso): mesmo tempo de resposta, sem enumeração.
+      const senhaOk = admin ? await conferirSenha(senha, admin.senha_hash) : await conferirSenhaFalsa(senha);
+      if (!admin || !admin.ativo || !senhaOk) throw erroCredenciais();
       return {
         token: assinarTokenPlataforma(app, admin.id),
         usuario: { id: admin.id, nome: admin.nome, email: admin.email },
@@ -71,6 +74,8 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
       for (const u of candidatos) {
         if (await conferirSenha(senha, u.senha_hash)) validos.push(u);
       }
+      // E-mail inexistente também roda um bcrypt (hash falso): mesmo tempo de resposta, sem enumeração.
+      if (candidatos.length === 0) await conferirSenhaFalsa(senha);
       if (validos.length === 0) throw erroCredenciais();
 
       const ativos = validos.filter((u) => u.clinica.status === 'ativa');

@@ -4,15 +4,15 @@
  * selecionarAgendamentosParaLembrete(clinicaId) → agendamentos de AMANHÃ (no fuso da clínica),
  *   status `agendado`, paciente ativo com aceita_whatsapp = true e whatsapp preenchido, sem
  *   lembrete já enviado/pendente (lembrete_enviado_em nulo e sem mensagem de lembrete ativa).
- * processarLembretesClinica(clinicaId) → para uma clínica com recurso `whatsapp` e sessão
- *   conectada, enfileira um lembrete por agendamento (envio sai pela fila, ver envio.ts).
+ * processarLembretesClinica(clinicaId) → para uma clínica ativa, com assinatura ativa (não
+ *   vencida/cancelada/bloqueada), recurso `whatsapp` e sessão conectada, enfileira um lembrete por agendamento (envio sai pela fila, ver envio.ts).
  * processarLembretesTodasClinicas() → usado pelo job diário (workers/lembretes.ts).
  */
 import { addDays, startOfDay } from 'date-fns';
 import { fromZonedTime, toZonedTime } from 'date-fns-tz';
 import { env } from '../../config/env';
 import { prisma } from '../../lib/prisma';
-import { assegurarRecurso } from '../../plugins/recursos';
+import { assegurarAssinaturaAtiva, assegurarRecurso } from '../../plugins/recursos';
 import { ErroNegocio } from '../../utils/erros';
 import { enfileirarMensagem } from './envio';
 import { textoLembrete } from './mensagens';
@@ -62,7 +62,7 @@ export type ResultadoLembretes = {
   enfileirados: number;
   falharam: number;
   /** Motivo quando a clínica foi pulada inteira. */
-  ignorada?: 'recurso_indisponivel' | 'sessao_desconectada' | 'clinica_inativa';
+  ignorada?: 'recurso_indisponivel' | 'sessao_desconectada' | 'clinica_inativa' | 'assinatura_inativa';
   erros: Record<string, number>;
 };
 
@@ -74,6 +74,12 @@ export async function processarLembretesClinica(
 
   const clinica = await prisma.clinica.findUnique({ where: { id: clinicaId } });
   if (!clinica || clinica.status !== 'ativa') return { ...resultado, ignorada: 'clinica_inativa' };
+  try {
+    await assegurarAssinaturaAtiva(clinicaId);
+  } catch (e) {
+    if (e instanceof ErroNegocio) return { ...resultado, ignorada: 'assinatura_inativa' };
+    throw e;
+  }
   try {
     await assegurarRecurso(clinicaId, 'whatsapp');
   } catch (e) {

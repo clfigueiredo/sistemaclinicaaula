@@ -1,0 +1,140 @@
+# Sistema Clínica — PRODUÇÃO (VPS). Arquivo completo (não é override do docker-compose.yml de dev).
+#
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+#
+# - Postgres, Redis e WPPConnect NÃO publicam portas: só a rede interna do compose os alcança.
+# - Só o Caddy publica 80/443 (HTTPS automático via Let's Encrypt).
+# - Todas as variáveis sensíveis são OBRIGATÓRIAS (${VAR:?...}): sem valor padrão inseguro.
+# - Passo a passo, geração de segredos e backup: docs/DEPLOY.md.
+name: sistema-clinica
+
+x-api-env: &api-env
+  NODE_ENV: production
+  PORT: "3333"
+  HOST: 0.0.0.0
+  # A API fica atrás de UM proxy confiável (Caddy): usa o X-Forwarded-For dele.
+  TRUST_PROXY: "1"
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  # Use senhas só com [A-Za-z0-9] (ex.: openssl rand -hex 32) — elas vão dentro de URLs.
+  DATABASE_URL: postgresql://${POSTGRES_USER:?defina POSTGRES_USER}:${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?defina POSTGRES_DB}?schema=public
+  REDIS_URL: redis://:${REDIS_PASSWORD:?defina REDIS_PASSWORD}@redis:6379
+  JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET}
+  JWT_EXPIRA_EM: ${JWT_EXPIRA_EM:-12h}
+  WEB_URL: https://${DOMINIO:?defina DOMINIO}
+  EXECUTAR_WORKERS: "false"
+  UPLOAD_DIR: ./uploads
+  UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-10}
+  WPPCONNECT_URL: http://wppconnect:21465
+  WPPCONNECT_SECRET_KEY: ${WPPCONNECT_SECRET_KEY:?defina WPPCONNECT_SECRET_KEY}
+  WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:?defina WEBHOOK_TOKEN}
+  TZ_PADRAO: ${TZ_PADRAO:-America/Sao_Paulo}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: clinica-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?defina POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?defina POSTGRES_DB}
+      TZ: America/Sao_Paulo
+    volumes:
+      - postgres_dados:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: clinica-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?defina REDIS_PASSWORD}"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?defina REDIS_PASSWORD}
+    volumes:
+      - redis_dados:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  wppconnect:
+    image: wppconnect/server-cli:latest
+    container_name: clinica-wppconnect
+    restart: unless-stopped
+    command:
+      - --secretKey
+      - ${WPPCONNECT_SECRET_KEY:?defina WPPCONNECT_SECRET_KEY}
+      - --port
+      - "21465"
+      - --startAllSession
+      - --webhook-url
+      # Chamada interna (rede do compose), sem passar pelo Caddy.
+      - http://api:3333/webhooks/whatsapp?token=${WEBHOOK_TOKEN:?defina WEBHOOK_TOKEN}
+      - --no-webhook-onPresenceChanged
+      - --no-webhook-onParticipantsChanged
+      - --log-level
+      - info
+    volumes:
+      - wpp_tokens:/usr/src/wpp-server/tokens
+      - wpp_userdata:/usr/src/wpp-server/userDataDir
+
+  api:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+    image: sistema-clinica-api
+    container_name: clinica-api
+    restart: unless-stopped
+    environment: *api-env
+    # Aplica as migrations e sobe a API.
+    command: ["sh", "-c", "npx prisma migrate deploy && node dist/server.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - uploads:/app/apps/api/uploads
+
+  worker:
+    image: sistema-clinica-api
+    container_name: clinica-worker
+    restart: unless-stopped
+    environment: *api-env
+    command: ["node", "dist/worker.js"]
+    depends_on:
+      api:
+        condition: service_started
+
+  caddy:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+    container_name: clinica-caddy
+    restart: unless-stopped
+    environment:
+      DOMINIO: ${DOMINIO:?defina DOMINIO}
+      EMAIL_ACME: ${EMAIL_ACME:?defina EMAIL_ACME}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  postgres_dados:
+  redis_dados:
+  wpp_tokens:
+  wpp_userdata:
+  uploads:
+  caddy_data:
+  caddy_config:

@@ -13,3 +13,4 @@ apps/web/e2e/resultados/
 apps/web/e2e/capturas/
 apps/web/test-results/
 apps/web/playwright-report/
+.env.prod

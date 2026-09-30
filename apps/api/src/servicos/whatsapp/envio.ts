@@ -5,10 +5,11 @@
  *
  *   enfileirarMensagem(...)  → grava mensagens_whatsapp (pendente) e coloca um job na fila
  *                              NOMES_FILAS.ENVIO_WHATSAPP (jobId = id da mensagem ⇒ sem job duplicado).
- *                              Verifica consentimento (aceita_whatsapp), recurso `whatsapp` e o limite
+ *                              Verifica consentimento (aceita_whatsapp), assinatura ativa, recurso `whatsapp` e o limite
  *                              `max_mensagens` (com advisory lock por clínica). Se não puder, grava a
  *                              mensagem como `falhou` (erro = código) e NÃO enfileira.
- *   processarEnvio(id)       → executado pelo worker. Revalida consentimento/recurso/limite, espera a
+ *   processarEnvio(id)       → executado pelo worker. Revalida consentimento/assinatura/recurso/limite
+ *                              (assinatura vencida/cancelada/bloqueada ⇒ falhou/assinatura_inativa), espera a
  *                              vez da clínica (intervalo aleatório 20–40 s, ver reservarVezDaClinica)
  *                              e chama whatsappService.enviarMensagem. pendente → enviada | falhou.
  *
@@ -24,7 +25,7 @@
  */
 import type { TipoMensagem } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
-import { assegurarLimite, assegurarRecurso } from '../../plugins/recursos';
+import { assegurarAssinaturaAtiva, assegurarLimite, assegurarRecurso } from '../../plugins/recursos';
 import { ErroNegocio } from '../../utils/erros';
 import { INTERVALO_ENVIO_MS, NOMES_FILAS, obterConexaoRedis, obterFila, type JobEnvioWhatsapp } from '../filas';
 import { normalizarTelefone } from './telefone';
@@ -105,6 +106,7 @@ export async function enfileirarMensagem(nova: NovaMensagem): Promise<ResultadoE
     else if (!telefone) erro = 'telefone_invalido';
     else {
       try {
+        await assegurarAssinaturaAtiva(clinicaId);
         await assegurarRecurso(clinicaId, 'whatsapp');
         await assegurarLimite(clinicaId, 'max_mensagens', { tx });
       } catch (e) {
@@ -230,6 +232,7 @@ export async function processarEnvio(
     return marcarFalha(msg.id, 'agendamento_alterado');
   }
   try {
+    await assegurarAssinaturaAtiva(clinicaId);
     await assegurarRecurso(clinicaId, 'whatsapp');
     // A própria mensagem pendente já conta no uso: quantidade 0 ⇒ só barra se o uso passou do limite
     // (ex.: plano reduzido depois de enfileirar).

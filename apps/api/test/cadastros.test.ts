@@ -269,52 +269,47 @@ describe('convênios', () => {
 });
 
 describe('usuários', () => {
-  it('recepcionista conta no limite e admin não', async () => {
-    const { headers } = await novaClinica('Clínica Usuários', 'teste');
+  it('recepção e admins adicionais contam no limite de equipe; o admin principal não', async () => {
+    const { headers } = await novaClinica('Clínica Usuários', 'teste'); // limite 1
     const base = { senha: 'segredo1' };
-    const admin2 = await app.inject({
-      method: 'POST',
-      url: '/usuarios',
-      headers,
-      payload: { ...base, nome: 'Outro Admin', email: `adm2.${sufixo}@x.local`, papel: 'admin' },
-    });
+    const post = (nome: string, email: string, papel: PapelUsuario) =>
+      app.inject({ method: 'POST', url: '/usuarios', headers, payload: { ...base, nome, email, papel } });
+
+    // admin adicional ocupa a única vaga
+    const admin2 = await post('Outro Admin', `adm2.${sufixo}@x.local`, 'admin');
     expect(admin2.statusCode).toBe(201);
     expect(admin2.json()).not.toHaveProperty('senha_hash');
+    const r1 = await post('Recep Um', `rec1.${sufixo}@x.local`, 'recepcao');
+    expect(r1.statusCode).toBe(403);
+    expect(r1.json()).toMatchObject({ erro: 'limite_atingido', recurso: 'max_recepcionistas', limite: 1, uso: 1 });
+    const admin3 = await post('Admin Três', `adm3.${sufixo}@x.local`, 'admin');
+    expect(admin3.statusCode).toBe(403);
+    expect(admin3.json().erro).toBe('limite_atingido');
 
-    const r1 = await app.inject({
-      method: 'POST',
-      url: '/usuarios',
-      headers,
-      payload: { ...base, nome: 'Recep Um', email: `rec1.${sufixo}@x.local`, papel: 'recepcao' },
-    });
-    expect(r1.statusCode).toBe(201);
-    const r2 = await app.inject({
-      method: 'POST',
-      url: '/usuarios',
-      headers,
-      payload: { ...base, nome: 'Recep Dois', email: `rec2.${sufixo}@x.local`, papel: 'recepcao' },
-    });
-    expect(r2.statusCode).toBe(403);
-    expect(r2.json()).toMatchObject({ erro: 'limite_atingido', recurso: 'max_recepcionistas' });
+    // desativar o admin adicional libera a vaga para a recepção
+    const desativar = await app.inject({ method: 'PUT', url: `/usuarios/${admin2.json().id}`, headers, payload: { ativo: false } });
+    expect(desativar.statusCode).toBe(200);
+    const r1b = await post('Recep Um', `rec1.${sufixo}@x.local`, 'recepcao');
+    expect(r1b.statusCode).toBe(201);
 
-    // mais admins continuam liberados
-    const admin3 = await app.inject({
-      method: 'POST',
-      url: '/usuarios',
-      headers,
-      payload: { ...base, nome: 'Admin Três', email: `adm3.${sufixo}@x.local`, papel: 'admin' },
-    });
-    expect(admin3.statusCode).toBe(201);
-    // rebaixar admin para recepção também consome o limite
-    const rebaixar = await app.inject({ method: 'PUT', url: `/usuarios/${admin3.json().id}`, headers, payload: { papel: 'recepcao' } });
-    expect(rebaixar.statusCode).toBe(403);
+    // reativar o admin adicional agora estoura o limite
+    const reativar = await app.inject({ method: 'PUT', url: `/usuarios/${admin2.json().id}`, headers, payload: { ativo: true } });
+    expect(reativar.statusCode).toBe(403);
+    expect(reativar.json().erro).toBe('limite_atingido');
 
-    // e-mail duplicado
+    // promover a recepção a admin não muda o uso (continua ocupando 1 vaga)
+    const promover = await app.inject({ method: 'PUT', url: `/usuarios/${r1b.json().id}`, headers, payload: { papel: 'admin' } });
+    expect(promover.statusCode).toBe(200);
+    // …e rebaixar de volta também não
+    const rebaixar = await app.inject({ method: 'PUT', url: `/usuarios/${r1b.json().id}`, headers, payload: { papel: 'recepcao' } });
+    expect(rebaixar.statusCode).toBe(200);
+
+    // e-mail duplicado (o conflito aparece mesmo com vaga: testado num PUT, que não consome limite)
     const dup = await app.inject({
-      method: 'POST',
-      url: '/usuarios',
+      method: 'PUT',
+      url: `/usuarios/${r1b.json().id}`,
       headers,
-      payload: { ...base, nome: 'Dup', email: `ADM2.${sufixo}@x.local`, papel: 'admin' },
+      payload: { email: `ADM2.${sufixo}@x.local` },
     });
     expect(dup.statusCode).toBe(409);
     expect(dup.json().erro).toBe('email_em_uso');

@@ -312,6 +312,10 @@ describe('alergias e medicações (dados clínicos)', () => {
   it('profissional/admin gerenciam; recepção não vê nem edita', async () => {
     const c = await app.inject({ method: 'POST', url: '/pacientes', headers: h(A.tokens.recepcao), payload: { nome: `Alérgico ${U}` } });
     const id = c.json().id;
+    // Vínculo do profissional com o paciente: agendamento feito pela recepção (criado_por ≠ profissional).
+    await prisma.agendamento.create({
+      data: { clinica_id: A.id, paciente_id: id, profissional_id: A.profissionalId, inicio: new Date(), fim: new Date() },
+    });
 
     const al = await app.inject({
       method: 'POST',

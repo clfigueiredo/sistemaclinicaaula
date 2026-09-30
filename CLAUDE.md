@@ -37,10 +37,12 @@ ler antes de implementar qualquer módulo. Setup do ambiente local: **`docs/SETU
 ```
 Sistema_Clinica/
 ├── CLAUDE.md
-├── docker-compose.yml        # postgres 16, redis 7, wppconnect (volumes nomeados)
+├── docker-compose.yml        # DEV: postgres 16, redis 7 (com senha), wppconnect — portas só em 127.0.0.1
+├── docker-compose.prod.yml   # PRODUÇÃO: + api, worker, caddy; sem portas internas; segredos obrigatórios
+├── deploy/                   # Dockerfile.api, Dockerfile.web (build do web + Caddy), Caddyfile, backup.sh
 ├── .env.example / .env       # ÚNICO .env, na raiz (lido por compose, API, Prisma e testes)
 ├── package.json              # scripts orquestradores (dev, build, typecheck, test, db:*)
-├── docs/ (ARQUITETURA.md, SETUP_LOCAL.md)
+├── docs/ (ARQUITETURA.md, SETUP_LOCAL.md, DEPLOY.md)
 ├── apps/api/                 # Fastify 5 + Zod 4 + Prisma 6 (ESM, TypeScript estrito, tsx watch / tsup)
 │   ├── prisma/schema.prisma  # modelo de dados completo + migrations + seed.ts
 │   ├── test/                 # vitest (banco clinica_teste)
@@ -73,7 +75,9 @@ Sistema_Clinica/
 1. **Isolamento de tenant:** toda tabela de clínica tem `clinica_id`. O `clinica_id` vem **sempre do token JWT**, nunca do body/query. Toda consulta é filtrada automaticamente (extensão do Prisma). Nunca escrever query de dados de clínica sem esse filtro.
 2. **Limites do plano no backend:** toda criação que consome recurso passa por `exigirRecurso()` / `verificarLimite()`. Esconder botão no frontend é só UX, não é segurança.
 3. **Prontuário imutável:** `prontuario_registros` não tem update nem delete. Correção = novo registro.
-4. **Recepção não vê prontuário:** checar papel no backend.
+4. **Recepção não vê prontuário:** checar papel no backend. **Profissional só vê dados clínicos (prontuário,
+   anexos, alergias, medicações) de pacientes vinculados a ele** — use `assegurarAcessoProntuario` /
+   `podeVerDadosClinicos` de `modulos/prontuario/acesso.ts` (regra de vínculo abaixo).
 5. **WhatsApp desacoplado:** o resto do sistema só fala com `whatsappService`; nada de chamar a API do WPPConnect direto de outro módulo (para poder trocar pela API oficial da Meta depois).
 6. **Envio de WhatsApp sempre pela fila**, com intervalo aleatório (20–40 s) por sessão/clínica, e só para pacientes com `aceita_whatsapp = true`.
 7. **Log de acesso** (`logs_acesso`) ao visualizar/criar registros de prontuário (LGPD).
@@ -85,7 +89,17 @@ Sistema_Clinica/
 - **Convênio:** apenas seleção do nome (lista por clínica); sem faturamento TISS. Agendamento é `particular` ou `convenio`.
 - **Auto-cadastro** público cria clínica + usuário admin + assinatura no plano marcado como `plano_cadastro`.
 - **Teste grátis:** todas as funções, tudo limitado a **1** (profissional, recepcionista, agendamento, anexo, mensagem WhatsApp); limites **totais**, **sem prazo** de expiração.
-- O **admin da clínica não conta** no limite de recepcionistas e pode estar vinculado a um profissional.
+- **Limite de equipe** (`max_recepcionistas`, "usuários de equipe"): recepções ativas + admins ativos
+  **adicionais**. Só o **admin principal** (o admin ativo mais antigo — o do auto-cadastro) não conta.
+  Admin pode estar vinculado a um profissional.
+- **Vínculo profissional–paciente** (`prontuario/acesso.ts`): vale se houver registro de prontuário do
+  profissional para o paciente, OU agendamento dele com o paciente não cancelado **criado por outro usuário**,
+  OU agendamento dele com o paciente `compareceu`/`atendido` com início já alcançado. Agendamento criado
+  pelo próprio profissional não dá acesso antes do atendimento. Profissional **não troca o paciente** de um
+  agendamento (403); ninguém troca fora de `agendado`/`confirmado` (409). Vinculado a profissional
+  **inativo** ⇒ 403 `profissional_inativo` no prontuário/anexos.
+- **Assinatura inativa** (vencida/cancelada/bloqueada): HTTP somente leitura e WhatsApp parado
+  (`assegurarAssinaturaAtiva` em lembretes, enfileiramento, worker e webhook de respostas).
 - Planos ilimitados criados pelo super admin; cada limite tem período `total` ou `mensal`.
 - Mesmo profissional em duas clínicas = **dois cadastros independentes**.
 - Cada clínica conecta **o próprio número** de WhatsApp (uma sessão WPPConnect por clínica).
@@ -96,7 +110,7 @@ Sistema_Clinica/
 Todos na **raiz** do projeto (passo a passo completo em `docs/SETUP_LOCAL.md`):
 
 ```bash
-docker compose up -d        # postgres (5432), redis (6379), wppconnect (21465)
+docker compose up -d        # postgres (5432), redis (6379, com senha), wppconnect (21465) — só em 127.0.0.1
 npm install                 # raiz + apps/api + apps/web (postinstall) + prisma generate
 npm run db:migrate          # prisma migrate dev (cria/aplica migrations)
 npm run db:seed             # seed idempotente (super admin, recursos, planos, clínica demo)
@@ -167,7 +181,11 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
 - `autenticarClinica` recarrega o usuário do banco (papel/ativo atuais) e preenche:
   `request.usuarioClinica` `{ id, nome, email, papel, profissionalId, clinicaId }`, `request.clinicaId`,
   `request.db`, `request.assinatura` `{ status, somenteLeitura }`. Assinatura vencida/cancelada/bloqueada
-  ⇒ métodos não-GET recebem 403 `assinatura_inativa` automaticamente.
+  ⇒ métodos não-GET recebem 403 `assinatura_inativa` automaticamente. Fora do HTTP (workers/webhook) use
+  `assegurarAssinaturaAtiva(clinicaId)` / `assinaturaEstaAtiva` de `plugins/recursos.ts`.
+- Tokens emitidos antes de `usuarios.senha_alterada_em` são recusados (401). `PUT /usuarios/:id/senha`:
+  própria senha exige `senha_atual` (inclusive admin) e devolve `{ token }` novo; admin redefinindo a de
+  outro usuário não exige (204).
 - `autenticarAdmin` preenche `request.adminPlataforma` `{ id, nome, email }`. Módulos `admin-*` usam o **prisma cru**.
 - `exigirPapel(...papeis)` autentica (se preciso) e exige o papel. Recepção **nunca** acessa prontuário.
 
@@ -207,10 +225,11 @@ await request.db.$transaction(async (tx) => {
 
 - Códigos: `max_profissionais`, `max_recepcionistas`, `max_agendamentos`, `max_anexos`, `whatsapp`,
   `max_mensagens`, `financeiro`, `agendamento_online`.
-- Contagem: profissionais **ativos**; usuários `recepcao` **ativos** (admin não conta); agendamentos e
+- Contagem: profissionais **ativos**; usuários `recepcao` **ativos** + admins ativos − 1 (o admin principal não conta); agendamentos e
   anexos **criados** no período; mensagens de **saída** com status `pendente|enviada` no período.
   Período `mensal` = desde o dia 1 do mês no fuso da clínica.
-- Ao reativar profissional/recepcionista ou mudar papel para `recepcao`, chame `assegurarLimite` também.
+- Ao reativar profissional/recepcionista/admin ou mudar papel para `recepcao`/`admin`, chame `assegurarLimite` também
+  (em usuários, só quando o usuário passa a ocupar vaga — ver `ocupaVagaEquipe` em `modulos/usuarios`).
 - Estouro ⇒ 403 `{ erro: 'limite_atingido', recurso, limite, uso, mensagem }`; recurso desligado ⇒
   403 `{ erro: 'recurso_indisponivel', recurso, mensagem }`.
 - `obterUsoERecursos(clinicaId)` devolve `{ assinatura, plano, recursos }` (usado no `/me` e útil no admin).
@@ -247,7 +266,17 @@ await request.db.$transaction(async (tx) => {
 - Workers: registrar em `src/workers/index.ts` (`iniciarWorkers`). Em dev rodam no processo da API
   (`EXECUTAR_WORKERS=true`); em produção, processo separado (`npm run start:worker`).
 - Webhook: `POST /webhooks/whatsapp?token=WEBHOOK_TOKEN` (o docker-compose já aponta o WPPConnect para
-  `http://host.docker.internal:3333/webhooks/whatsapp?token=...`).
+  `http://host.docker.internal:3333/webhooks/whatsapp?token=...`). O logger mascara `token=` na URL
+  (`serializarRequisicao` em `app.ts`).
+
+### Variáveis de ambiente de segurança
+
+- `REDIS_PASSWORD` (compose sobe o Redis com `--requirepass`) e `REDIS_URL=redis://:SENHA@host:6379`.
+- `TRUST_PROXY`: `false` (padrão/dev — ignora `X-Forwarded-For`); produção atrás do Caddy: `1`.
+- `HOST`: interface da API (dev `0.0.0.0` para o webhook do WPPConnect via `host.docker.internal`).
+- Com `NODE_ENV=production` a API não sobe se `JWT_SECRET`/`WEBHOOK_TOKEN`/`WPPCONNECT_SECRET_KEY`
+  tiverem < 32 caracteres ou contiverem `troque`/`exemplo`/`changeme`, ou se a `REDIS_URL` não tiver senha
+  (`config/env.ts`, `problemasDeSeguranca`); em dev só avisa. Deploy: `docs/DEPLOY.md`.
 
 ### Web — padrões
 
@@ -305,5 +334,10 @@ await request.db.$transaction(async (tx) => {
 - [x] Prontuário + anexos
 - [x] WhatsApp: conexão QR, lembrete, confirmação, avisos à recepção (sino)
 - [x] Integração (fase 3): migration `ajustes_integracao`, onboarding real, QA E2E (Playwright) dos 5 fluxos
+- [x] Correções de segurança da auditoria: vínculo profissional–paciente, alergias/medicações, WhatsApp com
+      assinatura inativa, limite de equipe (admins adicionais), segredos em produção, TRUST_PROXY, troca de
+      senha (+ invalidação de tokens), profissional inativo, token mascarado no log, bcrypt falso no login,
+      compose de produção + Caddy + backup (`docs/DEPLOY.md`). Testes em `apps/api/test/seguranca.test.ts`.
 - [ ] Pendente: teste manual do WhatsApp com celular real (passo a passo em `docs/SETUP_LOCAL.md`)
+- [ ] Pendente: primeiro deploy na VPS seguindo `docs/DEPLOY.md` (build das imagens ainda não testado numa VPS)
 - [ ] Fase 2 do produto (financeiro, agendamento online etc. — ver `docs/ARQUITETURA.md` §10)

@@ -31,7 +31,10 @@
  *
  * Como o uso é contado (ver contarUso):
  *   max_profissionais   → profissionais com ativo = true (sempre o total atual)
- *   max_recepcionistas  → usuários papel 'recepcao' com ativo = true (admin NÃO conta)
+ *   max_recepcionistas  → "usuários de equipe": papel 'recepcao' com ativo = true + admins ativos
+ *                          ADICIONAIS. O admin principal (o admin ativo mais antigo — normalmente o do
+ *                          auto-cadastro) NÃO conta: uso = recepções ativas + max(0, admins ativos − 1).
+ *                          Criar/reativar/promover a admin também passa por assegurarLimite.
  *   max_agendamentos    → agendamentos criados (qualquer status) no período
  *   max_anexos          → anexos criados no período
  *   max_mensagens       → mensagens de SAÍDA com status pendente|enviada no período
@@ -54,9 +57,9 @@ export const CATALOGO_RECURSOS = [
   { codigo: 'max_profissionais', nome: 'Profissionais', tipo: 'limite', descricao: 'Profissionais ativos', ordem: 1 },
   {
     codigo: 'max_recepcionistas',
-    nome: 'Recepcionistas',
+    nome: 'Usuários de equipe',
     tipo: 'limite',
-    descricao: 'Usuários com papel recepção (o admin não conta)',
+    descricao: 'Recepção e administradores adicionais (o administrador principal não conta)',
     ordem: 2,
   },
   { codigo: 'max_agendamentos', nome: 'Agendamentos', tipo: 'limite', descricao: 'Agendamentos criados', ordem: 3 },
@@ -101,6 +104,42 @@ export function statusEfetivo(assinatura: { status: StatusAssinatura; expira_em:
 
 export function ehSomenteLeitura(status: StatusAssinatura | null | undefined): boolean {
   return !status || STATUS_SOMENTE_LEITURA.has(status);
+}
+
+/**
+ * Garante que a clínica está ativa e com assinatura que permite escrita (não vencida/cancelada/bloqueada).
+ * Usada fora do request HTTP (workers, webhook), onde o bloqueio automático do autenticarClinica não
+ * existe: job de lembretes, enfileiramento e envio de WhatsApp, processamento de mensagens recebidas.
+ * Lança ErroNegocio 403 `assinatura_inativa` (ou `clinica_inativa`).
+ */
+export async function assegurarAssinaturaAtiva(clinicaId: string): Promise<void> {
+  const clinica = await prisma.clinica.findUnique({
+    where: { id: clinicaId },
+    select: { status: true, assinatura: { select: { status: true, expira_em: true } } },
+  });
+  if (!clinica || clinica.status !== 'ativa') {
+    throw new ErroNegocio(403, 'clinica_inativa', 'Esta clínica está inativa.');
+  }
+  const status = clinica.assinatura ? statusEfetivo(clinica.assinatura) : null;
+  if (ehSomenteLeitura(status)) {
+    throw new ErroNegocio(
+      403,
+      'assinatura_inativa',
+      'A assinatura da clínica está vencida, cancelada ou bloqueada.',
+      { status },
+    );
+  }
+}
+
+/** Versão booleana de assegurarAssinaturaAtiva. */
+export async function assinaturaEstaAtiva(clinicaId: string): Promise<boolean> {
+  try {
+    await assegurarAssinaturaAtiva(clinicaId);
+    return true;
+  } catch (e) {
+    if (e instanceof ErroNegocio) return false;
+    throw e;
+  }
 }
 
 /** Assinatura atual com plano e recursos do plano (prisma cru — dado de plataforma). */
@@ -153,8 +192,13 @@ export async function contarUso(
   switch (codigo) {
     case 'max_profissionais':
       return db.profissional.count({ where: { clinica_id: clinicaId, ativo: true } });
-    case 'max_recepcionistas':
-      return db.usuario.count({ where: { clinica_id: clinicaId, papel: 'recepcao', ativo: true } });
+    case 'max_recepcionistas': {
+      // Sequencial: o cliente pode ser o `tx` de uma transação interativa.
+      const recepcao = await db.usuario.count({ where: { clinica_id: clinicaId, papel: 'recepcao', ativo: true } });
+      const admins = await db.usuario.count({ where: { clinica_id: clinicaId, papel: 'admin', ativo: true } });
+      // O admin principal não conta; os adicionais ocupam vaga de "usuário de equipe".
+      return recepcao + Math.max(0, admins - 1);
+    }
     case 'max_agendamentos':
       return db.agendamento.count({ where: { clinica_id: clinicaId, ...filtroData } });
     case 'max_anexos':

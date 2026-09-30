@@ -13,8 +13,8 @@
  * Permissões (ver acesso.ts):
  * - recepcao → 403 em todas as rotas do módulo.
  * - admin → lê tudo; escreve registro só se vinculado a um profissional (sai em nome dele); envia anexos.
- * - profissional → só pacientes "seus" (agendamento com ele ou registro feito por ele); o registro sai sempre
- *   com o profissional_id do próprio usuário. Primeiro registro de um paciente exige agendamento com ele.
+ * - profissional → só pacientes "seus" (regra de vínculo em acesso.ts) e profissional ativo; o registro sai sempre
+ *   com o profissional_id do próprio usuário. Vinculado a profissional inativo ⇒ 403 profissional_inativo.
  * - Correção: só do registro do mesmo paciente e do mesmo profissional autor.
  */
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
@@ -66,7 +66,7 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
     async (request, reply) => {
       const { pacienteId } = request.params;
       const { texto, agendamento_id, corrige_registro_id } = request.body;
-      const profissionalId = profissionalAutor(request);
+      const profissionalId = await profissionalAutor(request);
       await assegurarAcessoProntuario(request, pacienteId);
 
       if (agendamento_id) {

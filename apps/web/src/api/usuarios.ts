@@ -63,9 +63,14 @@ export function useEditarUsuario() {
   });
 }
 
+/**
+ * Admin redefinindo a senha de OUTRO usuário: { senha } → sem corpo (204).
+ * Trocando a PRÓPRIA senha: { senha, senha_atual } → { token } (os tokens antigos deixam de valer;
+ * guarde o novo com sessao.definir('clinica', token)).
+ */
 export function useRedefinirSenha() {
   return useMutation({
     mutationFn: ({ id, senha, senha_atual }: { id: string; senha: string; senha_atual?: string }) =>
-      api.put<void>(`/usuarios/${id}/senha`, { senha, senha_atual }),
+      api.put<{ token?: string } | undefined>(`/usuarios/${id}/senha`, { senha, senha_atual }),
   });
 }

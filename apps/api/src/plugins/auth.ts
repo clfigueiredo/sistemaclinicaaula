@@ -10,6 +10,7 @@
  *
  *   autenticarAdmin     → exige token de plataforma; preenche request.adminPlataforma
  *   autenticarClinica   → exige token de clínica; recarrega o usuário do banco (ativo, papel atual),
+ *                         recusa tokens emitidos antes da última troca de senha (senha_alterada_em),
  *                         preenche request.usuarioClinica, request.clinicaId, request.db (tenant)
  *                         e request.assinatura; bloqueia métodos não-GET se a assinatura estiver
  *                         vencida/cancelada/bloqueada (somente leitura).
@@ -102,6 +103,7 @@ export async function autenticarClinica(request: FastifyRequest, _reply?: Fastif
     include: { clinica: { select: { status: true, assinatura: { select: { status: true, expira_em: true } } } } },
   });
   if (!usuario || !usuario.ativo) throw erros.naoAutenticado();
+  if (tokenAnteriorATrocaDeSenha(token as { iat?: number }, usuario.senha_alterada_em)) throw erros.naoAutenticado();
   if (usuario.clinica.status !== 'ativa') {
     throw new ErroNegocio(403, 'clinica_inativa', 'Esta clínica está inativa. Entre em contato com o suporte.');
   }
@@ -128,6 +130,16 @@ export async function autenticarClinica(request: FastifyRequest, _reply?: Fastif
   request.clinicaId = usuario.clinica_id;
   request.assinatura = { status, somenteLeitura };
   request.db = criarDbTenant(usuario.clinica_id);
+}
+
+/**
+ * Token emitido antes da última troca de senha? (iat em segundos; compara no mesmo segundo para que o
+ * token novo, emitido logo após a troca, continue válido.)
+ */
+export function tokenAnteriorATrocaDeSenha(token: { iat?: number }, senhaAlteradaEm: Date | null): boolean {
+  if (!senhaAlteradaEm) return false;
+  if (typeof token.iat !== 'number') return true;
+  return token.iat < Math.floor(senhaAlteradaEm.getTime() / 1000);
 }
 
 /** preHandler que exige um dos papéis. Autentica a clínica se ainda não foi feito. */

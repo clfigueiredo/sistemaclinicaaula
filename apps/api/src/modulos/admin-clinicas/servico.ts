@@ -190,12 +190,18 @@ async function contarUsoEmLote(codigo: CodigoLimite, clinicaIds: string[], desde
       break;
     }
     case 'max_recepcionistas': {
+      // Recepções ativas + admins ativos adicionais (o admin principal não conta).
       const r = await prisma.usuario.groupBy({
-        by: ['clinica_id'],
-        where: { ...base, papel: 'recepcao', ativo: true },
+        by: ['clinica_id', 'papel'],
+        where: { ...base, papel: { in: ['recepcao', 'admin'] }, ativo: true },
         _count: { _all: true },
       });
-      linhas = contar(r);
+      const porClinica = new Map<string, number>();
+      for (const x of r) {
+        const n = x.papel === 'admin' ? Math.max(0, x._count._all - 1) : x._count._all;
+        porClinica.set(x.clinica_id, (porClinica.get(x.clinica_id) ?? 0) + n);
+      }
+      linhas = [...porClinica].map(([clinica_id, total]) => ({ clinica_id, total }));
       break;
     }
     case 'max_agendamentos': {

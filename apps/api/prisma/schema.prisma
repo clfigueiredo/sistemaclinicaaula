@@ -258,6 +258,8 @@ model Usuario {
   profissional_id String?      @unique @db.Uuid
   ativo           Boolean      @default(true)
   ultimo_acesso_em DateTime?
+  /// Última troca/redefinição de senha: tokens emitidos antes disso são recusados (autenticarClinica).
+  senha_alterada_em DateTime?
   criado_em       DateTime     @default(now())
   atualizado_em   DateTime     @updatedAt
 

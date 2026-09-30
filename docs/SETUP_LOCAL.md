@@ -61,7 +61,7 @@ Se o `hello-world` imprimir "Hello from Docker!", está tudo pronto.
 ### 1. Variáveis de ambiente
 
 ```powershell
-copy .env.example .env      # e ajuste JWT_SECRET / WPPCONNECT_SECRET_KEY / WEBHOOK_TOKEN
+copy .env.example .env      # e ajuste JWT_SECRET / WPPCONNECT_SECRET_KEY / WEBHOOK_TOKEN / REDIS_PASSWORD (+ REDIS_URL)
 ```
 
 Existe um **único `.env` na raiz**, lido pelo docker compose, pela API, pelo Prisma e pelos testes.
@@ -76,7 +76,7 @@ docker compose ps           # postgres e redis devem ficar "healthy"
 | Serviço | Porta | Observação |
 |---|---|---|
 | Postgres 16 | 5432 | usuário/senha/banco `clinica` (volume nomeado `postgres_dados`) |
-| Redis 7 | 6379 | filas BullMQ (volume `redis_dados`) |
+| Redis 7 | 6379 | filas BullMQ (volume `redis_dados`), com senha `REDIS_PASSWORD` (a `REDIS_URL` precisa conter a mesma senha) |
 | WPPConnect Server | 21465 | imagem `wppconnect/server-cli`; Swagger em http://localhost:21465/api-docs; webhook → `http://host.docker.internal:3333/webhooks/whatsapp?token=WEBHOOK_TOKEN` |
 
 Volumes **nomeados** (não bind mount) porque o disco do projeto é de rede.

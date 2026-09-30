@@ -1,4 +1,6 @@
-# Infraestrutura local do Sistema Clínica.
+# Infraestrutura LOCAL (desenvolvimento) do Sistema Clínica.
+# Produção: use docker-compose.prod.yml (sem portas expostas, segredos obrigatórios) — ver docs/DEPLOY.md.
+# As portas são publicadas SÓ em 127.0.0.1 (não ficam acessíveis pela rede local/internet).
 # Volumes NOMEADOS (não bind mount): o diretório do projeto fica num disco de rede (SMB),
 # o que deixa o Postgres lento/instável se os dados ficarem nele.
 # As variáveis ${...} vêm do arquivo .env da raiz (lido automaticamente pelo docker compose).
@@ -15,7 +17,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-clinica}
       TZ: America/Sao_Paulo
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_dados:/var/lib/postgresql/data
     healthcheck:
@@ -28,9 +30,12 @@ services:
     image: redis:7-alpine
     container_name: clinica-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    # Com senha (REDIS_PASSWORD do .env; a REDIS_URL da API usa redis://:SENHA@localhost:6379).
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?defina REDIS_PASSWORD no .env}"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?defina REDIS_PASSWORD no .env}
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_dados:/data
     healthcheck:
@@ -61,7 +66,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "21465:21465"
+      - "127.0.0.1:21465:21465"
     volumes:
       - wpp_tokens:/usr/src/wpp-server/tokens
       - wpp_userdata:/usr/src/wpp-server/userDataDir

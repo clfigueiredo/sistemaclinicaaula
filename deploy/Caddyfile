@@ -1,0 +1,35 @@
+# Caddy — HTTPS automático (Let's Encrypt) para o Sistema Clínica.
+# DOMINIO e EMAIL_ACME vêm do ambiente (docker-compose.prod.yml).
+{
+	email {$EMAIL_ACME}
+}
+
+{$DOMINIO} {
+	encode zstd gzip
+
+	# API: /api/* → api:3333 (o prefixo /api é removido, igual ao proxy do Vite em dev).
+	# O Caddy envia X-Forwarded-For; a API confia só nele (TRUST_PROXY=1).
+	handle_path /api/* {
+		reverse_proxy api:3333
+	}
+
+	# Front (build do Vite em /srv) com fallback para o index.html (rotas do React Router).
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

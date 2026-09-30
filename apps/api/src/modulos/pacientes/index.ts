@@ -6,7 +6,8 @@
  *          Busca por nome (sem diferenciar maiúsculas/acentos), CPF ou telefone/WhatsApp. Ordenado por nome.
  *          Por padrão só pacientes ativos (inativos=true inclui os inativos).
  *   GET    /pacientes/:id               todos os papéis → paciente completo + convenio + alergias + medicacoes
- *                                        (recepção recebe alergias/medicacoes = null: dados clínicos)
+ *                                        (recepção e profissional SEM vínculo com o paciente recebem
+ *                                        alergias/medicacoes = null: dados clínicos)
  *   POST   /pacientes                   admin, recepcao
  *   PUT    /pacientes/:id               admin, recepcao (substituição completa; `ativo` opcional inativa/reativa)
  *   POST   /pacientes/:id/alergias                 admin, profissional
@@ -21,13 +22,16 @@
  * - CPF opcional, validado e único por clínica (409 `cpf_em_uso`).
  * - telefone/whatsapp normalizados para dígitos com DDI 55.
  * - aceita_whatsapp (consentimento LGPD) é explícito, default false, e exige número de WhatsApp.
- * - Alergias/medicações são dados clínicos: recepção não vê nem edita.
+ * - Alergias/medicações são dados clínicos: recepção não vê nem edita; admin vê e edita de todos;
+ *   profissional só dos pacientes vinculados a ele e com o profissional ativo (mesma regra do
+ *   prontuário, ver prontuario/acesso.ts) — senão 403 `paciente_nao_vinculado`/`profissional_inativo`.
  */
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { Prisma, type Paciente } from '@prisma/client';
 import type { FastifyRequest } from 'fastify';
 import { autenticarClinica, exigirPapel } from '../../plugins/auth';
 import { erros, ou404 } from '../../utils/erros';
+import { assegurarAcessoProntuario, podeVerDadosClinicos } from '../prontuario/acesso';
 import {
   CorpoAlergia,
   CorpoMedicacao,
@@ -160,7 +164,8 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
 
   // ------------------------------------------------------------------ detalhe
   app.get('/:id', { schema: { params: ParamsId } }, async (request) => {
-    const verClinico = request.usuarioClinica!.papel !== 'recepcao';
+    // Admin vê tudo; profissional só dos pacientes vinculados a ele; recepção nunca.
+    const verClinico = await podeVerDadosClinicos(request, request.params.id);
     const paciente = ou404(
       await request.db.paciente.findUnique({
         where: { id: request.params.id },
@@ -178,7 +183,7 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
     );
     return {
       ...serializar(paciente),
-      // Recepção não vê dados clínicos (null ≠ "sem alergias").
+      // Recepção e profissional sem vínculo não veem dados clínicos (null ≠ "sem alergias").
       alergias: verClinico ? (paciente as typeof paciente & { alergias: unknown[] }).alergias : null,
       medicacoes: verClinico ? (paciente as typeof paciente & { medicacoes: unknown[] }).medicacoes : null,
     };
@@ -212,7 +217,15 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
   );
 
   // ------------------------------------------------------------------ alergias (dados clínicos)
-  const clinico = exigirPapel('admin', 'profissional');
+  // Papel admin/profissional + (profissional) vínculo com o paciente e profissional ativo. 404 se o
+  // paciente não existe na clínica.
+  const papelClinico = exigirPapel('admin', 'profissional');
+  const clinico = [
+    papelClinico,
+    async (request: FastifyRequest) => {
+      await assegurarAcessoProntuario(request, (request.params as { id: string }).id);
+    },
+  ];
 
   app.post(
     '/:id/alergias',

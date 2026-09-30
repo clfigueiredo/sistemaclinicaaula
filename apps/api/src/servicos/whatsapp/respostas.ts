@@ -13,9 +13,12 @@
  *        recepção (mensagem tipo `aviso`, direção entrada, `lida_em` nulo = não lido);
  *        outro texto → responde UMA vez com as instruções; sem lembrete pendente → só registra.
  *   As respostas saem pela fila (enfileirarMensagem), depois do commit.
+ * - Clínica inativa ou assinatura vencida/cancelada/bloqueada: a mensagem de entrada é GRAVADA
+ *   (histórico), mas nenhum agendamento é alterado e nada é respondido.
  */
 import { env } from '../../config/env';
 import { prisma } from '../../lib/prisma';
+import { assinaturaEstaAtiva } from '../../plugins/recursos';
 import { enfileirarMensagem, type NovaMensagem } from './envio';
 import {
   interpretarResposta,
@@ -61,6 +64,7 @@ async function processarMensagemRecebida(clinicaId: string, msg: MensagemRecebid
   const clinica = await prisma.clinica.findUnique({ where: { id: clinicaId } });
   if (!clinica) return { acao: 'ignorado', motivo: 'clinica_inexistente' };
   const fuso = clinica.fuso_horario || env.TZ_PADRAO;
+  const podeAgir = clinica.status === 'ativa' && (await assinaturaEstaAtiva(clinicaId));
   const telefones = variantesTelefone(msg.telefone);
   const respostas: NovaMensagem[] = [];
 
@@ -115,7 +119,7 @@ async function processarMensagemRecebida(clinicaId: string, msg: MensagemRecebid
         },
       });
 
-      if (!agendamento) return { acao: 'registrada', clinicaId, mensagemId: entrada.id };
+      if (!agendamento || !podeAgir) return { acao: 'registrada', clinicaId, mensagemId: entrada.id };
 
       const dados: DadosLembrete = {
         paciente: agendamento.paciente.nome,

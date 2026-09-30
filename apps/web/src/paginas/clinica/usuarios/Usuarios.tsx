@@ -1,4 +1,5 @@
-// Usuários da clínica e papéis (limite max_recepcionistas; admin não conta). Somente admin.
+// Usuários da clínica e papéis. Limite max_recepcionistas = "usuários de equipe": recepção + admins
+// adicionais (só o admin principal não conta). Somente admin.
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -9,6 +10,7 @@ import { ptBR } from 'date-fns/locale';
 import { KeyRound, Loader2, MoreHorizontal, Pencil, Power, PowerOff, UserPlus, Users } from 'lucide-react';
 import { ErroApi, mensagemDeErro } from '@/api/cliente';
 import { useMe, usePodeUsar } from '@/api/me';
+import { sessao } from '@/api/sessao';
 import { useListaProfissionais } from '@/api/profissionais';
 import { ROTULOS_PAPEL, type Papel } from '@/api/tipos';
 import {
@@ -132,9 +134,11 @@ function DialogoUsuario({
   });
   const papel = form.watch('papel');
 
-  // Recepção já ativa não consome vaga nova ao ser editada.
-  const jaOcupaVaga = usuario?.papel === 'recepcao' && usuario.ativo;
-  const recepcaoBloqueada = !vagaRecepcao.pode && !jaOcupaVaga;
+  // Recepção ou admin adicional já ativo não consome vaga nova ao ser editado (quem edita é admin,
+  // então qualquer outro admin é "adicional").
+  const jaOcupaVaga = !!usuario?.ativo && (usuario.papel === 'recepcao' || usuario.papel === 'admin');
+  const equipeBloqueada = !vagaRecepcao.pode && !jaOcupaVaga;
+  const ocupaVagaEquipe = (p: Papel) => p === 'recepcao' || p === 'admin';
 
   const vinculados = new Map(
     usuarios.filter((u) => u.profissional_id && u.id !== usuario?.id).map((u) => [u.profissional_id!, u.nome]),
@@ -219,7 +223,8 @@ function DialogoUsuario({
                   <FormLabel>Papel</FormLabel>
                   <div className="grid gap-2 sm:grid-cols-3">
                     {(['admin', 'recepcao', 'profissional'] as Papel[]).map((p) => {
-                      const bloqueado = (p === 'recepcao' && recepcaoBloqueada && field.value !== 'recepcao') || (ehEu && p !== usuario?.papel);
+                      const bloqueado =
+                        (ocupaVagaEquipe(p) && equipeBloqueada && field.value !== p) || (ehEu && p !== usuario?.papel);
                       return (
                         <button
                           key={p}
@@ -234,7 +239,7 @@ function DialogoUsuario({
                           title={
                             ehEu && p !== usuario?.papel
                               ? 'Você não pode alterar o seu próprio papel.'
-                              : p === 'recepcao' && recepcaoBloqueada
+                              : ocupaVagaEquipe(p) && equipeBloqueada
                                 ? (vagaRecepcao.mensagem ?? undefined)
                                 : undefined
                           }
@@ -245,7 +250,7 @@ function DialogoUsuario({
                     })}
                   </div>
                   <FormDescription>{DESCRICAO_PAPEL[papel]}</FormDescription>
-                  {papel === 'recepcao' && recepcaoBloqueada && (
+                  {ocupaVagaEquipe(papel) && equipeBloqueada && !ehEu && (
                     <p className="text-sm text-destructive">{vagaRecepcao.mensagem}</p>
                   )}
                   <FormMessage />
@@ -329,7 +334,7 @@ function DialogoUsuario({
               <Button type="button" variant="outline" onClick={aoFechar} disabled={salvando}>
                 Cancelar
               </Button>
-              <Button type="submit" disabled={salvando || (papel === 'recepcao' && recepcaoBloqueada)}>
+              <Button type="submit" disabled={salvando || (ocupaVagaEquipe(papel) && equipeBloqueada && !ehEu)}>
                 {salvando && <Loader2 className="size-4 animate-spin" />}
                 {criando ? 'Criar usuário' : 'Salvar'}
               </Button>
@@ -345,24 +350,42 @@ function DialogoUsuario({
 
 const esquemaSenha = z
   .object({
+    senha_atual: z.string(),
     senha: z.string().min(6, 'A senha deve ter pelo menos 6 caracteres').max(100),
     confirmacao: z.string(),
   })
   .refine((d) => d.senha === d.confirmacao, { path: ['confirmacao'], message: 'As senhas não conferem' });
 
-function DialogoSenha({ usuario, aoFechar }: { usuario: UsuarioClinica; aoFechar: () => void }) {
+type DadosSenha = z.infer<typeof esquemaSenha>;
+
+function DialogoSenha({ usuario, ehEu, aoFechar }: { usuario: UsuarioClinica; ehEu: boolean; aoFechar: () => void }) {
   const redefinir = useRedefinirSenha();
-  const form = useForm<z.infer<typeof esquemaSenha>>({
+  const form = useForm<DadosSenha>({
     resolver: zodResolver(esquemaSenha),
-    defaultValues: { senha: '', confirmacao: '' },
+    defaultValues: { senha_atual: '', senha: '', confirmacao: '' },
   });
 
-  async function enviar(d: z.infer<typeof esquemaSenha>) {
+  async function enviar(d: DadosSenha) {
+    // Trocar a própria senha exige a senha atual (o backend também exige).
+    if (ehEu && !d.senha_atual) return form.setError('senha_atual', { message: 'Informe a senha atual' });
     try {
-      await redefinir.mutateAsync({ id: usuario.id, senha: d.senha });
-      toast.success('Senha redefinida.', { description: `Informe a nova senha a ${usuario.nome}.` });
+      const r = await redefinir.mutateAsync({
+        id: usuario.id,
+        senha: d.senha,
+        ...(ehEu ? { senha_atual: d.senha_atual } : {}),
+      });
+      if (ehEu) {
+        // Os tokens antigos deixam de valer: guarda o novo para continuar logado.
+        if (r?.token) sessao.definir('clinica', r.token);
+        toast.success('Sua senha foi alterada.');
+      } else {
+        toast.success('Senha redefinida.', { description: `Informe a nova senha a ${usuario.nome}.` });
+      }
       aoFechar();
     } catch (e) {
+      if (e instanceof ErroApi && e.codigo === 'senha_atual_invalida') {
+        return form.setError('senha_atual', { message: e.mensagem });
+      }
       toastErro(e);
     }
   }
@@ -371,13 +394,30 @@ function DialogoSenha({ usuario, aoFechar }: { usuario: UsuarioClinica; aoFechar
     <Dialog open onOpenChange={(v) => !v && !redefinir.isPending && aoFechar()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Redefinir senha</DialogTitle>
+          <DialogTitle>{ehEu ? 'Alterar minha senha' : 'Redefinir senha'}</DialogTitle>
           <DialogDescription>
-            Nova senha de acesso para {usuario.nome} ({usuario.email}).
+            {ehEu
+              ? 'Confirme a senha atual e escolha a nova. Suas outras sessões abertas serão encerradas.'
+              : `Nova senha de acesso para ${usuario.nome} (${usuario.email}). As sessões abertas dele serão encerradas.`}
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(enviar)} className="space-y-4" noValidate>
+            {ehEu && (
+              <FormField
+                control={form.control}
+                name="senha_atual"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Senha atual</FormLabel>
+                    <FormControl>
+                      <Input type="password" autoComplete="current-password" autoFocus {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
             <FormField
               control={form.control}
               name="senha"
@@ -385,7 +425,7 @@ function DialogoSenha({ usuario, aoFechar }: { usuario: UsuarioClinica; aoFechar
                 <FormItem>
                   <FormLabel>Nova senha</FormLabel>
                   <FormControl>
-                    <Input type="password" autoComplete="new-password" autoFocus {...field} />
+                    <Input type="password" autoComplete="new-password" autoFocus={!ehEu} {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -410,7 +450,7 @@ function DialogoSenha({ usuario, aoFechar }: { usuario: UsuarioClinica; aoFechar
               </Button>
               <Button type="submit" disabled={redefinir.isPending}>
                 {redefinir.isPending && <Loader2 className="size-4 animate-spin" />}
-                Redefinir senha
+                {ehEu ? 'Alterar senha' : 'Redefinir senha'}
               </Button>
             </DialogFooter>
           </form>
@@ -442,8 +482,8 @@ export default function PaginaUsuarios() {
   const adminsAtivos = usuarios.filter((u) => u.papel === 'admin' && u.ativo).length;
 
   function alternarStatus(u: UsuarioClinica) {
-    const reativandoRecepcao = !u.ativo && u.papel === 'recepcao';
-    if (reativandoRecepcao && !vagaRecepcao.pode) {
+    const reativandoEquipe = !u.ativo && (u.papel === 'recepcao' || u.papel === 'admin');
+    if (reativandoEquipe && !vagaRecepcao.pode) {
       toast.error('Limite do plano', { description: vagaRecepcao.mensagem ?? undefined });
       return;
     }
@@ -451,8 +491,8 @@ export default function PaginaUsuarios() {
       titulo: u.ativo ? `Desativar ${u.nome}?` : `Reativar ${u.nome}?`,
       descricao: u.ativo
         ? 'O usuário perde o acesso ao sistema imediatamente. Os registros feitos por ele são mantidos.'
-        : reativandoRecepcao
-          ? 'O usuário volta a acessar o sistema e passa a contar no limite de recepcionistas do plano.'
+        : reativandoEquipe
+          ? 'O usuário volta a acessar o sistema e passa a contar no limite de usuários de equipe do plano.'
           : 'O usuário volta a acessar o sistema.',
       rotuloConfirmar: u.ativo ? 'Desativar' : 'Reativar',
       destrutivo: u.ativo,
@@ -472,11 +512,11 @@ export default function PaginaUsuarios() {
     <div>
       <CabecalhoPagina
         titulo="Usuários"
-        descricao="Quem acessa o sistema e com qual papel. O administrador não conta no limite de recepcionistas."
+        descricao="Quem acessa o sistema e com qual papel. Recepção e administradores adicionais contam no limite de usuários de equipe; o administrador principal não conta."
         acoes={
           <>
             <span className="flex items-center gap-2 text-sm text-muted-foreground">
-              Recepcionistas
+              Usuários de equipe (recepção e admins adicionais)
               <UsoRecurso codigo="max_recepcionistas" />
             </span>
             <Button onClick={() => setDialogoUsuario({ usuario: null })}>
@@ -602,7 +642,7 @@ export default function PaginaUsuarios() {
           aoFechar={() => setDialogoUsuario(null)}
         />
       )}
-      {senhaDe && <DialogoSenha usuario={senhaDe} aoFechar={() => setSenhaDe(null)} />}
+      {senhaDe && <DialogoSenha usuario={senhaDe} ehEu={senhaDe.id === euId} aoFechar={() => setSenhaDe(null)} />}
       {dialogo}
     </div>
   );

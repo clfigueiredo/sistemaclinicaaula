@@ -12,7 +12,7 @@ import { env } from '../src/config/env';
 import { prisma } from '../src/lib/prisma';
 import { assinarTokenClinica } from '../src/plugins/auth';
 import { CATALOGO_RECURSOS, type CodigoRecurso } from '../src/plugins/recursos';
-import { definirEnfileirador, processarEnvio } from '../src/servicos/whatsapp/envio';
+import { definirEnfileirador, enfileirarMensagem, processarEnvio } from '../src/servicos/whatsapp/envio';
 import { criarAdaptadorFake, type AdaptadorFake } from '../src/servicos/whatsapp/fakeAdapter';
 import { interpretarResposta } from '../src/servicos/whatsapp/mensagens';
 import { processarLembretesClinica, selecionarAgendamentosParaLembrete } from '../src/servicos/whatsapp/lembretes';
@@ -477,5 +477,65 @@ describe('rotas da clínica', () => {
     expect(r.statusCode).toBe(200);
     expect(r.json()).toMatchObject({ selecionados: 1, enfileirados: 1 });
     expect(jobs).toHaveLength(1);
+  });
+});
+
+describe('assinatura inativa (vencida/cancelada/bloqueada)', () => {
+  async function inativarAssinatura(c: Clin, como: 'vencida' | 'cancelada' | 'bloqueada') {
+    await prisma.assinatura.update({
+      where: { clinica_id: c.clinica.id },
+      // "vencida" também vale por expiração: status ativa com expira_em no passado.
+      data: como === 'vencida' ? { status: 'ativa', expira_em: new Date(Date.now() - 60_000) } : { status: como },
+    });
+  }
+
+  it('job de lembretes pula a clínica', async () => {
+    const c = await criarClinica('Clínica Vencida Lembrete', planoGrande.id);
+    const p = await criarPaciente(c);
+    await criarAgendamento(c, p.id, emDias(1, '11:00'));
+    await inativarAssinatura(c, 'vencida');
+    const r = await processarLembretesClinica(c.clinica.id);
+    expect(r).toMatchObject({ ignorada: 'assinatura_inativa', enfileirados: 0 });
+    expect(jobs).toHaveLength(0);
+    expect(await prisma.mensagemWhatsapp.count({ where: { clinica_id: c.clinica.id } })).toBe(0);
+  });
+
+  it('enfileiramento grava falhou e o worker não envia o que já estava na fila', async () => {
+    const c = await criarClinica('Clínica Bloqueada Envio', planoGrande.id);
+    const p = await criarPaciente(c);
+    await criarAgendamento(c, p.id, emDias(1, '15:00'));
+    await processarLembretesClinica(c.clinica.id);
+    expect(jobs).toHaveLength(1); // enfileirado enquanto a assinatura estava ativa
+
+    await inativarAssinatura(c, 'bloqueada');
+    await drenarFila();
+    expect(fake.enviadas).toHaveLength(0);
+    const lembrete = await prisma.mensagemWhatsapp.findFirstOrThrow({ where: { clinica_id: c.clinica.id, tipo: 'lembrete' } });
+    expect(lembrete).toMatchObject({ status: 'falhou', erro: 'assinatura_inativa' });
+
+    const nova = await enfileirarMensagem({ clinicaId: c.clinica.id, pacienteId: p.id, tipo: 'confirmacao', conteudo: 'Olá' });
+    expect(nova).toMatchObject({ enfileirada: false, erro: 'assinatura_inativa' });
+    expect(jobs).toHaveLength(0);
+  });
+
+  it('mensagem recebida é gravada, mas não altera o agendamento nem responde', async () => {
+    const c = await criarClinica('Clínica Cancelada Webhook', planoGrande.id);
+    const p = await criarPaciente(c);
+    const ag = await criarAgendamento(c, p.id, emDias(1, '16:00'));
+    await processarLembretesClinica(c.clinica.id);
+    await drenarFila();
+    expect(fake.enviadas).toHaveLength(1);
+    fake.limpar();
+
+    await inativarAssinatura(c, 'cancelada');
+    const r = await webhook(msgRecebida(c, p.whatsapp!, '2'));
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ acao: 'registrada' });
+    expect((await prisma.agendamento.findUniqueOrThrow({ where: { id: ag.id } })).status).toBe('agendado');
+    const entrada = await prisma.mensagemWhatsapp.findMany({ where: { clinica_id: c.clinica.id, direcao: 'entrada' } });
+    expect(entrada).toHaveLength(1); // só a mensagem recebida (sem aviso de cancelamento)
+    expect(entrada[0]).toMatchObject({ conteudo: '2', status: 'recebida', tipo: null });
+    expect(jobs).toHaveLength(0);
+    expect(fake.enviadas).toHaveLength(0);
   });
 });

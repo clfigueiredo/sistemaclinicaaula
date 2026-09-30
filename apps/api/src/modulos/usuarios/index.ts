@@ -4,11 +4,15 @@
  * Rotas (prefixo "/usuarios"):
  *   GET  /usuarios            admin; lista (sem senha_hash) com o profissional vinculado
  *   POST /usuarios            admin; { nome, email, senha, papel, profissional_id? }
- *                             papel recepcao consome `max_recepcionistas` (admin não conta)
+ *                             papel recepcao OU admin adicional consome `max_recepcionistas`
+ *                             ("usuários de equipe"; só o admin principal não conta)
  *   PUT  /usuarios/:id        admin; { nome?, email?, papel?, profissional_id?, ativo? }
- *                             reativar recepção / mudar para recepção → consome o limite
- *   PUT  /usuarios/:id/senha  admin redefine a senha de qualquer usuário: { senha };
- *                             qualquer usuário troca a PRÓPRIA senha: { senha, senha_atual }
+ *                             passar a ocupar vaga de equipe (reativar recepção/admin, promover a
+ *                             recepção/admin) → consome o limite
+ *   PUT  /usuarios/:id/senha  admin redefine a senha de OUTRO usuário: { senha } → 204;
+ *                             qualquer usuário (inclusive admin) troca a PRÓPRIA senha: { senha, senha_atual }
+ *                             → 200 { token } (token novo: os antigos deixam de valer).
+ *                             Toda troca grava senha_alterada_em ⇒ tokens anteriores do usuário são recusados.
  *
  * Regras:
  *   - E-mail único na clínica (409 email_em_uso).
@@ -20,7 +24,7 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import type { PapelUsuario, Prisma } from '@prisma/client';
 import { z } from 'zod';
-import { autenticarClinica, exigirPapel } from '../../plugins/auth';
+import { assinarTokenClinica, autenticarClinica, exigirPapel } from '../../plugins/auth';
 import { assegurarLimite } from '../../plugins/recursos';
 import type { DbTenant } from '../../plugins/tenant';
 import { ErroNegocio, erros, ou404 } from '../../utils/erros';
@@ -53,6 +57,16 @@ const selecao = {
   criado_em: true,
   profissional: { select: { id: true, nome: true, cor_agenda: true, ativo: true } },
 } satisfies Prisma.UsuarioSelect;
+
+/**
+ * O usuário ocupa vaga de "usuário de equipe" (max_recepcionistas)? Recepção ativa sempre; admin ativo
+ * só se houver OUTRO admin ativo (o admin principal não conta — a contagem é recepções + admins − 1).
+ */
+function ocupaVagaEquipe(papel: PapelUsuario, ativo: boolean, outrosAdminsAtivos: number): boolean {
+  if (!ativo) return false;
+  if (papel === 'recepcao') return true;
+  return papel === 'admin' && outrosAdminsAtivos > 0;
+}
 
 async function assegurarEmailLivre(tx: Tx, valor: string, ignorarId?: string) {
   const existente = await tx.usuario.findFirst({
@@ -108,7 +122,10 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
       const dados = request.body;
       const senhaHash = await gerarHashSenha(dados.senha);
       const criado = await request.db.$transaction(async (tx) => {
-        if (dados.papel === 'recepcao') await assegurarLimite(request.clinicaId, 'max_recepcionistas', { tx });
+        if (dados.papel === 'recepcao' || dados.papel === 'admin') {
+          // Novo admin é sempre adicional (quem cria já é admin ativo) ⇒ consome vaga de equipe.
+          await assegurarLimite(request.clinicaId, 'max_recepcionistas', { tx });
+        }
         await assegurarEmailLivre(tx, dados.email);
         const profissionalId = await resolverVinculo(tx, dados.papel, dados.profissional_id ?? null);
         return tx.usuario.create({
@@ -167,9 +184,11 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
           }
         }
 
-        // Passar a ocupar uma vaga de recepção (reativar ou mudar de papel) consome o limite.
-        const eraRecepcaoAtiva = atual.papel === 'recepcao' && atual.ativo;
-        if (papelFinal === 'recepcao' && ativoFinal && !eraRecepcaoAtiva) {
+        // Passar a ocupar uma vaga de equipe (reativar, virar recepção ou admin adicional) consome o limite.
+        const outrosAdminsAtivos = await tx.usuario.count({ where: { papel: 'admin', ativo: true, id: { not: id } } });
+        const ocupavaVaga = ocupaVagaEquipe(atual.papel, atual.ativo, outrosAdminsAtivos);
+        const ocuparaVaga = ocupaVagaEquipe(papelFinal, ativoFinal, outrosAdminsAtivos);
+        if (ocuparaVaga && !ocupavaVaga) {
           await assegurarLimite(request.clinicaId, 'max_recepcionistas', { tx });
         }
 
@@ -203,16 +222,27 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
       if (!proprio && eu.papel !== 'admin') throw erros.proibido('Somente o administrador pode redefinir senhas.');
 
       const usuario = ou404(await request.db.usuario.findUnique({ where: { id } }), MSG_NAO_ENCONTRADO);
-      if (proprio && eu.papel !== 'admin') {
+      // Trocar a PRÓPRIA senha exige a atual, inclusive para o admin (token roubado não troca a senha).
+      if (proprio) {
         if (!request.body.senha_atual || !(await conferirSenha(request.body.senha_atual, usuario.senha_hash))) {
           throw erros.invalido('A senha atual não confere.', 'senha_atual_invalida');
         }
       }
+      // senha_alterada_em invalida os tokens emitidos antes (ver autenticarClinica).
       await request.db.usuario.update({
         where: { id },
-        data: { senha_hash: await gerarHashSenha(request.body.senha) },
+        data: { senha_hash: await gerarHashSenha(request.body.senha), senha_alterada_em: new Date() },
       });
-      return reply.status(204).send();
+      if (!proprio) return reply.status(204).send();
+      // Quem trocou a própria senha recebe um token novo para continuar logado.
+      return {
+        token: assinarTokenClinica(app, {
+          usuarioId: eu.id,
+          clinicaId: eu.clinicaId,
+          papel: eu.papel,
+          profissionalId: eu.profissionalId,
+        }),
+      };
     },
   );
 };
