@@ -1,5 +1,6 @@
-// Ficha do paciente (/pacientes/:id): cabeçalho + abas Dados, Consultas, Prontuário e Anexos.
+// Ficha do paciente (/pacientes/:id): cabeçalho + abas Dados, Consultas, Prontuário, Anexos e Documentos.
 // Prontuário e Anexos só aparecem para PAPEIS_ROTA.prontuario (recepção NÃO vê — o backend também bloqueia).
+// Documentos (fase 2, dono: módulo documentos): PAPEIS_ROTA.documentos + recurso `documentos_pdf` no plano.
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, MessageCircle, ShieldCheck } from 'lucide-react';
 import { useMe } from '@/api/me';
@@ -14,9 +15,10 @@ import AbaProntuario from './abas/AbaProntuario';
 import AbaAnexos from './abas/AbaAnexos';
 import AbaDados from './abas/AbaDados';
 import AbaConsultas from './abas/AbaConsultas';
+import AbaDocumentos from './abas/AbaDocumentos';
 import { calcularIdade, exibirTelefone } from './utils';
 
-const ABAS = ['dados', 'consultas', 'prontuario', 'anexos'] as const;
+const ABAS = ['dados', 'consultas', 'prontuario', 'anexos', 'documentos'] as const;
 type Aba = (typeof ABAS)[number];
 
 export default function PaginaFichaPaciente() {
@@ -25,12 +27,13 @@ export default function PaginaFichaPaciente() {
   const { data: me } = useMe();
   const { data: paciente, isLoading, error } = usePaciente(id);
   const podeProntuario = !!me && PAPEIS_ROTA.prontuario.includes(me.papel);
+  const podeDocumentos =
+    !!me && PAPEIS_ROTA.documentos.includes(me.papel) && !!me.recursos.documentos_pdf?.habilitado;
 
   const pedida = params.get('aba') as Aba | null;
-  const aba: Aba =
-    pedida && ABAS.includes(pedida) && (podeProntuario || (pedida !== 'prontuario' && pedida !== 'anexos'))
-      ? pedida
-      : 'dados';
+  const permitida = (a: Aba) =>
+    a === 'documentos' ? podeDocumentos : podeProntuario || (a !== 'prontuario' && a !== 'anexos');
+  const aba: Aba = pedida && ABAS.includes(pedida) && permitida(pedida) ? pedida : 'dados';
 
   const voltar = (
     <Button variant="ghost" size="sm" asChild className="-ml-2 mb-2">
@@ -132,6 +135,7 @@ export default function PaginaFichaPaciente() {
           <TabsTrigger value="consultas">Consultas</TabsTrigger>
           {podeProntuario && <TabsTrigger value="prontuario">Prontuário</TabsTrigger>}
           {podeProntuario && <TabsTrigger value="anexos">Anexos</TabsTrigger>}
+          {podeDocumentos && <TabsTrigger value="documentos">Documentos</TabsTrigger>}
         </TabsList>
         <TabsContent value="dados">
           <AbaDados paciente={paciente} />
@@ -147,6 +151,11 @@ export default function PaginaFichaPaciente() {
         {podeProntuario && (
           <TabsContent value="anexos">
             <AbaAnexos pacienteId={paciente.id} />
+          </TabsContent>
+        )}
+        {podeDocumentos && (
+          <TabsContent value="documentos">
+            <AbaDocumentos pacienteId={paciente.id} />
           </TabsContent>
         )}
       </Tabs>

@@ -3,8 +3,8 @@
  *   - `default`: plugin Fastify (FastifyPluginAsyncZod)
  *   - `prefixo`: prefixo das rotas (ex.: '/pacientes')
  *
- * Todos os módulos previstos já estão importados aqui. Os agentes/módulos da fase 2 NÃO precisam
- * editar este arquivo: basta implementar o index.ts do próprio módulo.
+ * Todos os módulos previstos (MVP + fase 2 do produto) já estão importados aqui. Os agentes/módulos NÃO
+ * precisam editar este arquivo: basta implementar o index.ts do próprio módulo (contratos em docs/FASE2.md).
  */
 import type { FastifyInstance } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
@@ -19,6 +19,14 @@ import * as pacientes from './pacientes';
 import * as prontuario from './prontuario';
 import * as agendamentos from './agendamentos';
 import * as whatsapp from './whatsapp';
+// Fase 2 do produto (contratos em docs/FASE2.md)
+import * as financeiro from './financeiro';
+import * as agendamentoOnline from './agendamento-online';
+import * as listaEspera from './lista-espera';
+import * as documentos from './documentos';
+import * as retornos from './retornos';
+import * as dashboard from './dashboard';
+import * as adminCobranca from './admin-cobranca';
 
 type ModuloApi = { default: FastifyPluginAsyncZod; prefixo: string };
 
@@ -34,6 +42,13 @@ export const MODULOS: Record<string, ModuloApi> = {
   prontuario,
   agendamentos,
   whatsapp,
+  financeiro,
+  'agendamento-online': agendamentoOnline,
+  'lista-espera': listaEspera,
+  documentos,
+  retornos,
+  dashboard,
+  'admin-cobranca': adminCobranca,
 };
 
 export async function registrarModulos(app: FastifyInstance): Promise<void> {

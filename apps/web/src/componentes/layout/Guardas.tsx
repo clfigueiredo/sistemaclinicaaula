@@ -3,6 +3,8 @@
  *
  *   <RotaClinica />                         exige token da clínica (carrega /me)
  *   <RotaClinica papeis={['admin']} />       exige também um dos papéis
+ *   <RotaClinica recurso="financeiro" />     exige também o recurso habilitado no plano (senão mostra
+ *                                           <RecursoIndisponivel />)
  *   <RotaAdmin />                            exige token do super admin
  *   <RotaPublica tipo="clinica" />           se já logado, redireciona para a área logada
  */
@@ -10,8 +12,8 @@ import type { ReactNode } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contextos/AuthContext';
 import { useAdminMe, useMe } from '@/api/me';
-import type { Papel } from '@/api/tipos';
-import { Carregando, SemPermissao } from '@/componentes/comum';
+import type { CodigoRecurso, Papel } from '@/api/tipos';
+import { Carregando, RecursoIndisponivel, SemPermissao } from '@/componentes/comum';
 import { Button } from '@/componentes/ui/button';
 import { mensagemDeErro } from '@/api/cliente';
 
@@ -26,7 +28,15 @@ function ErroSessao({ erro, tentar }: { erro: unknown; tentar: () => void }) {
   );
 }
 
-export function RotaClinica({ papeis, children }: { papeis?: Papel[]; children?: ReactNode }) {
+export function RotaClinica({
+  papeis,
+  recurso,
+  children,
+}: {
+  papeis?: Papel[];
+  recurso?: CodigoRecurso;
+  children?: ReactNode;
+}) {
   const { tokenClinica } = useAuth();
   const location = useLocation();
   const { data: me, isLoading, error, refetch } = useMe();
@@ -35,6 +45,7 @@ export function RotaClinica({ papeis, children }: { papeis?: Papel[]; children?:
   if (isLoading) return <Carregando telaCheia={!children} />;
   if (error || !me) return <ErroSessao erro={error} tentar={() => refetch()} />;
   if (papeis && !papeis.includes(me.papel)) return <SemPermissao />;
+  if (recurso && !me.recursos[recurso]?.habilitado) return <RecursoIndisponivel nome={me.recursos[recurso]?.nome} />;
   return children ? <>{children}</> : <Outlet />;
 }
 

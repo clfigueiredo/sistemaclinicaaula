@@ -37,7 +37,10 @@ export function useOnboarding() {
 }
 
 export type DadosClinica = Partial<
-  Pick<Me['clinica'], 'nome' | 'responsavel' | 'email' | 'telefone' | 'endereco' | 'cidade' | 'uf' | 'cep' | 'fuso_horario'>
+  Pick<
+    Me['clinica'],
+    'nome' | 'responsavel' | 'email' | 'telefone' | 'endereco' | 'cidade' | 'uf' | 'cep' | 'fuso_horario' | 'slug'
+  >
 >;
 
 /** Edita os dados cadastrais da própria clínica (somente admin). */

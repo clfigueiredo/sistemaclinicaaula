@@ -1,4 +1,8 @@
 // Painel lateral com os detalhes do agendamento e as ações de status.
+// Fase 2: blocos de outros módulos (cada um é do seu dono — docs/FASE2.md), exibidos conforme status/papel/plano:
+//   <RecebimentoConsulta />   financeiro      — não cancelado; admin/recepção; recurso `financeiro`
+//   <DefinirRetorno />        retornos        — compareceu/atendido; recurso `retorno_automatico`
+//   <SugestoesListaEspera />  lista-espera    — cancelado/faltou; admin/recepção; recurso `lista_espera`
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { format } from 'date-fns';
@@ -26,6 +30,8 @@ import {
   type Agendamento,
 } from '@/api/agendamentos';
 import { ROTULOS_STATUS_AGENDAMENTO, type StatusAgendamento } from '@/api/tipos';
+import { useMe } from '@/api/me';
+import { PAPEIS_ROTA, recursoHabilitado } from '@/rotas/navegacao';
 import { Button } from '@/componentes/ui/button';
 import { Label } from '@/componentes/ui/label';
 import { Separator } from '@/componentes/ui/separator';
@@ -34,6 +40,9 @@ import { Textarea } from '@/componentes/ui/textarea';
 import { mascararTelefone } from '@/lib/formatos';
 import { cn } from '@/lib/utils';
 import { ESTILO_STATUS } from './utilidades';
+import { DefinirRetorno } from './DefinirRetorno';
+import { RecebimentoConsulta } from './RecebimentoConsulta';
+import { SugestoesListaEspera } from './SugestoesListaEspera';
 
 const ACOES: Record<
   Exclude<StatusAgendamento, 'agendado'>,
@@ -67,6 +76,7 @@ export function PainelAgendamento({
   podeAlterar: boolean;
 }) {
   const mudar = useMudarStatusAgendamento();
+  const { data: me } = useMe();
   const [cancelando, setCancelando] = useState(false);
   const [motivo, setMotivo] = useState('');
 
@@ -91,6 +101,17 @@ export function PainelAgendamento({
   }
 
   const proximos = a ? TRANSICOES_STATUS[a.status] : [];
+  const equipe = !!me && (me.papel === 'admin' || me.papel === 'recepcao');
+  const mostrarRecebimento =
+    !!a &&
+    a.status !== 'cancelado' &&
+    !!me &&
+    PAPEIS_ROTA.recebimentoConsulta.includes(me.papel) &&
+    recursoHabilitado(me, 'financeiro');
+  const mostrarRetorno =
+    !!a && (a.status === 'compareceu' || a.status === 'atendido') && recursoHabilitado(me, 'retorno_automatico');
+  const mostrarListaEspera =
+    !!a && (a.status === 'cancelado' || a.status === 'faltou') && equipe && recursoHabilitado(me, 'lista_espera');
 
   return (
     <Sheet open={aberto} onOpenChange={onOpenChange}>
@@ -164,6 +185,10 @@ export function PainelAgendamento({
                   <p className="rounded-md bg-muted/60 p-3 whitespace-pre-wrap">{a.observacoes}</p>
                 </div>
               )}
+
+              {a && mostrarRecebimento && <RecebimentoConsulta agendamento={a} />}
+              {a && mostrarRetorno && <DefinirRetorno agendamento={a} podeAlterar={podeAlterar} />}
+              {a && mostrarListaEspera && <SugestoesListaEspera agendamento={a} />}
 
               {podeAlterar && proximos.length > 0 && (
                 <>

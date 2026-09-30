@@ -28,6 +28,11 @@ x-api-env: &api-env
   WPPCONNECT_SECRET_KEY: ${WPPCONNECT_SECRET_KEY:?defina WPPCONNECT_SECRET_KEY}
   WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:?defina WEBHOOK_TOKEN}
   TZ_PADRAO: ${TZ_PADRAO:-America/Sao_Paulo}
+  # Fase 2: cifra credenciais dos gateways de pagamento (openssl rand -hex 32). NÃO troque depois de em uso.
+  CHAVE_CRIPTOGRAFIA: ${CHAVE_CRIPTOGRAFIA:?defina CHAVE_CRIPTOGRAFIA}
+  # Webhooks dos gateways: https://DOMINIO/api/webhooks/pagamentos/<gateway> (o Caddy remove o /api).
+  API_URL_PUBLICA: https://${DOMINIO:?defina DOMINIO}/api
+  WEB_URL_PUBLICA: https://${DOMINIO:?defina DOMINIO}
 
 services:
   postgres:

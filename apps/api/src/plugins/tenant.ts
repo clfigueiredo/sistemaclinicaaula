@@ -30,14 +30,14 @@
  *        ou404(await request.db.paciente.findUnique({ where: { id: body.paciente_id } }))
  *   3. $queryRaw/$executeRaw não são filtrados: se usar SQL cru, filtre `clinica_id` manualmente
  *      com `request.clinicaId`.
- *   4. `ProntuarioRegistro` é imutável: update/delete/upsert lançam ErroNegocio 403 (e o banco
- *      também tem trigger bloqueando).
+ *   4. `ProntuarioRegistro` e `DocumentoClinico` são imutáveis: update/delete/upsert lançam ErroNegocio 403
+ *      (`prontuario_imutavel` / `documento_imutavel`) e o banco também tem trigger bloqueando.
  *
  * Modelos de plataforma acessados via request.db:
  *   - Clinica:    só a própria clínica (leitura e `update`; `status`/`documento` não podem ser alterados)
- *   - Assinatura: só leitura, filtrada pela clínica
+ *   - Assinatura, Cobranca: só leitura, filtradas pela clínica (a clínica vê as próprias faturas)
  *   - Recurso, Plano, PlanoRecurso: só leitura
- *   - UsuarioPlataforma: proibido
+ *   - UsuarioPlataforma, GatewayPagamento, EventoGateway: proibidos
  * ============================================================================
  */
 import { Prisma, type PrismaClient } from '@prisma/client';
@@ -60,10 +60,51 @@ export const MODELOS_DE_CLINICA: ReadonlySet<Prisma.ModelName> = new Set<Prisma.
   'WhatsappSessao',
   'MensagemWhatsapp',
   'LogAcesso',
+  // Fase 2 do produto
+  'ConfiguracaoClinica',
+  'ContaFinanceira',
+  'CategoriaFinanceira',
+  'MovimentacaoFinanceira',
+  'Titulo',
+  'Recorrencia',
+  'SolicitacaoAgendamento',
+  'ListaEspera',
+  'DocumentoClinico',
+  'Retorno',
 ]);
 
-const MODELOS_IMUTAVEIS: ReadonlySet<string> = new Set(['ProntuarioRegistro']);
-const MODELOS_SOMENTE_LEITURA: ReadonlySet<string> = new Set(['Recurso', 'Plano', 'PlanoRecurso', 'Assinatura']);
+/** Modelos só-acréscimo (sem update/delete). Código do erro por modelo. */
+const MODELOS_IMUTAVEIS: ReadonlyMap<string, { codigo: string; mensagem: string }> = new Map([
+  [
+    'ProntuarioRegistro',
+    {
+      codigo: 'prontuario_imutavel',
+      mensagem:
+        'Registros de prontuário não podem ser alterados nem excluídos. Para corrigir, crie um novo registro.',
+    },
+  ],
+  [
+    'DocumentoClinico',
+    {
+      codigo: 'documento_imutavel',
+      mensagem: 'Documentos emitidos não podem ser alterados nem excluídos. Para corrigir, emita um novo documento.',
+    },
+  ],
+]);
+/**
+ * Plataforma, só leitura via request.db. `Assinatura` e `Cobranca` são filtradas pela clínica do token
+ * (a clínica vê as próprias faturas); `GatewayPagamento` e `EventoGateway` NÃO estão aqui (proibidos).
+ */
+const MODELOS_SOMENTE_LEITURA: ReadonlySet<string> = new Set([
+  'Recurso',
+  'Plano',
+  'PlanoRecurso',
+  'Assinatura',
+  'Cobranca',
+]);
+const MODELOS_FILTRADOS_POR_CLINICA: ReadonlySet<string> = new Set(['Assinatura', 'Cobranca']);
+/** Plataforma, proibidos via request.db. */
+const MODELOS_PROIBIDOS: ReadonlySet<string> = new Set(['UsuarioPlataforma', 'GatewayPagamento', 'EventoGateway']);
 
 const OPERACOES_LEITURA = new Set([
   'findUnique',
@@ -139,7 +180,7 @@ export function criarDbTenant(clinicaId: string, base: PrismaClient = prisma) {
           const a = (args ?? {}) as Registro;
 
           // --- Modelos de plataforma ---
-          if (model === 'UsuarioPlataforma') {
+          if (MODELOS_PROIBIDOS.has(model)) {
             throw new ErroNegocio(403, 'proibido', 'Acesso negado a dados da plataforma.');
           }
           if (model === 'Clinica') {
@@ -164,7 +205,9 @@ export function criarDbTenant(clinicaId: string, base: PrismaClient = prisma) {
             if (!OPERACOES_LEITURA.has(operation)) {
               throw new ErroNegocio(403, 'proibido', 'Operação não permitida.');
             }
-            if (model === 'Assinatura') a.where = { ...((a.where ?? {}) as Registro), clinica_id: clinicaId };
+            if (MODELOS_FILTRADOS_POR_CLINICA.has(model)) {
+              a.where = { ...((a.where ?? {}) as Registro), clinica_id: clinicaId };
+            }
             return query(a);
           }
           if (!MODELOS_DE_CLINICA.has(model as Prisma.ModelName)) {
@@ -173,12 +216,9 @@ export function criarDbTenant(clinicaId: string, base: PrismaClient = prisma) {
           }
 
           // --- Modelos de clínica ---
-          if (MODELOS_IMUTAVEIS.has(model) && OPERACOES_ESCRITA.has(operation) && !operation.startsWith('create')) {
-            throw new ErroNegocio(
-              403,
-              'prontuario_imutavel',
-              'Registros de prontuário não podem ser alterados nem excluídos. Para corrigir, crie um novo registro.',
-            );
+          const imutavel = MODELOS_IMUTAVEIS.get(model);
+          if (imutavel && OPERACOES_ESCRITA.has(operation) && !operation.startsWith('create')) {
+            throw new ErroNegocio(403, imutavel.codigo, imutavel.mensagem);
           }
 
           if (OPERACOES_COM_WHERE.has(operation)) {

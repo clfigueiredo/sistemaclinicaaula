@@ -17,6 +17,15 @@ export const NOMES_FILAS = {
   ENVIO_WHATSAPP: 'envio-whatsapp',
   /** Job diário (repeatable) que seleciona agendamentos de amanhã e enfileira lembretes. Dados: JobLembretes. */
   LEMBRETES: 'lembretes',
+  // --- Fase 2 do produto (workers em src/workers/, donos em docs/FASE2.md) ---
+  /** Financeiro: job diário que gera os títulos do próximo mês das recorrências ativas. Dados: JobPorClinica. */
+  FINANCEIRO_RECORRENCIAS: 'financeiro-recorrencias',
+  /** Retornos: job diário que envia convites de retorno (N dias antes) e marca `lembrado`. Dados: JobPorClinica. */
+  RETORNOS: 'retornos',
+  /** Agendamento online: job periódico que expira solicitações pendentes cujo horário já passou. Dados: JobPorClinica. */
+  SOLICITACOES_AGENDAMENTO: 'solicitacoes-agendamento',
+  /** Cobrança do SaaS: job diário que marca cobranças vencidas e bloqueia após a tolerância. Dados: JobCobrancas. */
+  COBRANCAS: 'cobrancas',
 } as const;
 
 export type NomeFila = (typeof NOMES_FILAS)[keyof typeof NOMES_FILAS];
@@ -27,6 +36,9 @@ export const INTERVALO_ENVIO_MS = { minimo: 20_000, maximo: 40_000 } as const;
 export type JobEnvioWhatsapp = { clinicaId: string; mensagemId: string };
 /** data: data de referência ISO (opcional; padrão = amanhã no fuso da clínica). */
 export type JobLembretes = { data?: string };
+/** Jobs diários da fase 2: sem clinicaId = todas as clínicas; `data` = referência ISO (testes/reprocesso). */
+export type JobPorClinica = { clinicaId?: string; data?: string };
+export type JobCobrancas = { data?: string };
 
 export const OPCOES_PADRAO_JOB: JobsOptions = {
   attempts: 3,

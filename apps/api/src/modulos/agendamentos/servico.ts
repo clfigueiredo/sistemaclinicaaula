@@ -7,7 +7,7 @@ import type { StatusAgendamento } from '@prisma/client';
 import { addMinutes } from 'date-fns';
 import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
 import type { DbTenant } from '../../plugins/tenant';
-import { ErroNegocio } from '../../utils/erros';
+import { ErroNegocio, erros } from '../../utils/erros';
 
 /** `request.db` ou o `tx` de `request.db.$transaction`. */
 export type ClienteAgenda = Pick<
@@ -187,4 +187,27 @@ export async function calcularDisponibilidade(
   }
   slots.sort((a, b) => a.inicio.localeCompare(b.inicio));
   return slots;
+}
+
+/**
+ * Validações de horário comuns a criar e remarcar (executar dentro da transação, APÓS
+ * travarAgendaProfissional): duração, passado/grade (exceto encaixe), bloqueio e conflito.
+ * Exportada para outros módulos que criam agendamentos (ex.: aprovação do agendamento online).
+ */
+export async function validarHorario(
+  tx: ClienteAgenda,
+  a: { profissionalId: string; inicio: Date; fim: Date; fuso: string; encaixe: boolean; ignorarId?: string },
+) {
+  if (a.fim <= a.inicio) throw erros.invalido('O fim deve ser depois do início.', 'intervalo_invalido');
+  if (a.fim.getTime() - a.inicio.getTime() > 12 * 3_600_000) {
+    throw erros.invalido('A duração máxima de um agendamento é de 12 horas.', 'intervalo_invalido');
+  }
+  if (!a.encaixe) {
+    if (a.inicio.getTime() < Date.now() - 60_000) {
+      throw new ErroNegocio(400, 'horario_passado', 'Não é possível agendar em um horário que já passou.');
+    }
+    await validarGrade(tx, a.profissionalId, a.inicio, a.fim, a.fuso);
+  }
+  await validarBloqueio(tx, a.profissionalId, a.inicio, a.fim);
+  await validarConflito(tx, a.profissionalId, a.inicio, a.fim, a.ignorarId);
 }

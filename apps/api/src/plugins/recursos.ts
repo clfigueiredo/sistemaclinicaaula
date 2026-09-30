@@ -66,14 +66,42 @@ export const CATALOGO_RECURSOS = [
   { codigo: 'max_anexos', nome: 'Anexos', tipo: 'limite', descricao: 'Arquivos de exame anexados', ordem: 4 },
   { codigo: 'whatsapp', nome: 'WhatsApp', tipo: 'booleano', descricao: 'Permite conectar um número de WhatsApp', ordem: 5 },
   { codigo: 'max_mensagens', nome: 'Mensagens WhatsApp', tipo: 'limite', descricao: 'Mensagens de WhatsApp enviadas', ordem: 6 },
-  { codigo: 'financeiro', nome: 'Financeiro', tipo: 'booleano', descricao: 'Módulo financeiro (fase 2)', ordem: 7 },
+  {
+    codigo: 'financeiro',
+    nome: 'Financeiro',
+    tipo: 'booleano',
+    descricao: 'Caixa, contas a pagar e a receber, recorrências e repasses',
+    ordem: 7,
+  },
   {
     codigo: 'agendamento_online',
     nome: 'Agendamento online',
     tipo: 'booleano',
-    descricao: 'Agendamento pelo paciente (fase 2)',
+    descricao: 'Página pública para o paciente solicitar horários',
     ordem: 8,
   },
+  {
+    codigo: 'lista_espera',
+    nome: 'Lista de espera',
+    tipo: 'booleano',
+    descricao: 'Pacientes aguardando vaga, com sugestão quando um horário é liberado',
+    ordem: 9,
+  },
+  {
+    codigo: 'documentos_pdf',
+    nome: 'Receituário e atestados',
+    tipo: 'booleano',
+    descricao: 'Receitas, atestados, declarações e pedidos de exame em PDF',
+    ordem: 10,
+  },
+  {
+    codigo: 'retorno_automatico',
+    nome: 'Retorno automático',
+    tipo: 'booleano',
+    descricao: 'Controle de retornos com convite pelo WhatsApp',
+    ordem: 11,
+  },
+  { codigo: 'dashboard', nome: 'Dashboard', tipo: 'booleano', descricao: 'Indicadores da agenda e do financeiro', ordem: 12 },
 ] as const;
 
 export type CodigoRecurso = (typeof CATALOGO_RECURSOS)[number]['codigo'];

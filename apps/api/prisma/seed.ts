@@ -4,8 +4,10 @@
  * Cria:
  *  - Super admin: admin@sistema.local / admin123
  *  - Catálogo de recursos (tabela `recursos`)
- *  - Plano "Teste grátis" (plano_cadastro = true): tudo limitado a 1, período total, WhatsApp habilitado
- *  - Plano "Profissional" (exemplo pago): limites maiores, agendamentos/mensagens mensais
+ *  - Plano "Teste grátis" (plano_cadastro = true): tudo limitado a 1, período total, WhatsApp e TODOS os
+ *    recursos liga/desliga (financeiro, agendamento online, lista de espera, documentos PDF, retorno, dashboard)
+ *  - Plano "Profissional" (exemplo pago): limites maiores, agendamentos/mensagens mensais, fase 2 habilitada
+ *  - Planos criados pelo super admin recebem as linhas dos recursos novos DESABILITADAS (migration + aqui)
  *  - Clínica demo (plano Profissional, assinatura ativa) com:
  *      admin@demo.local / demo123          (admin)
  *      recepcao@demo.local / demo123       (recepção)
@@ -28,6 +30,16 @@ const IDS = {
 
 type ConfigRecurso = { habilitado: boolean; limite: number | null; periodo: PeriodoLimite };
 
+/** Recursos liga/desliga da fase 2 do produto — habilitados nos dois planos do seed. */
+const FASE2_HABILITADA = {
+  financeiro: { habilitado: true, limite: null, periodo: 'total' },
+  agendamento_online: { habilitado: true, limite: null, periodo: 'total' },
+  lista_espera: { habilitado: true, limite: null, periodo: 'total' },
+  documentos_pdf: { habilitado: true, limite: null, periodo: 'total' },
+  retorno_automatico: { habilitado: true, limite: null, periodo: 'total' },
+  dashboard: { habilitado: true, limite: null, periodo: 'total' },
+} satisfies Partial<Record<CodigoRecurso, ConfigRecurso>>;
+
 const RECURSOS_TESTE: Record<CodigoRecurso, ConfigRecurso> = {
   max_profissionais: { habilitado: true, limite: 1, periodo: 'total' },
   max_recepcionistas: { habilitado: true, limite: 1, periodo: 'total' },
@@ -35,8 +47,8 @@ const RECURSOS_TESTE: Record<CodigoRecurso, ConfigRecurso> = {
   max_anexos: { habilitado: true, limite: 1, periodo: 'total' },
   whatsapp: { habilitado: true, limite: null, periodo: 'total' },
   max_mensagens: { habilitado: true, limite: 3, periodo: 'total' },
-  financeiro: { habilitado: false, limite: null, periodo: 'total' },
-  agendamento_online: { habilitado: false, limite: null, periodo: 'total' },
+  // Teste grátis = todas as funções (limitadas pelos limites acima).
+  ...FASE2_HABILITADA,
 };
 
 const RECURSOS_PROFISSIONAL: Record<CodigoRecurso, ConfigRecurso> = {
@@ -46,8 +58,7 @@ const RECURSOS_PROFISSIONAL: Record<CodigoRecurso, ConfigRecurso> = {
   max_anexos: { habilitado: true, limite: 1000, periodo: 'total' },
   whatsapp: { habilitado: true, limite: null, periodo: 'total' },
   max_mensagens: { habilitado: true, limite: 2000, periodo: 'mensal' },
-  financeiro: { habilitado: false, limite: null, periodo: 'total' },
-  agendamento_online: { habilitado: false, limite: null, periodo: 'total' },
+  ...FASE2_HABILITADA,
 };
 
 async function salvarRecursosDoPlano(planoId: string, recursos: Record<CodigoRecurso, ConfigRecurso>) {
@@ -106,6 +117,25 @@ async function main() {
   });
   await salvarRecursosDoPlano(IDS.planoProfissional, RECURSOS_PROFISSIONAL);
 
+  // Demais planos (criados pelo super admin): garante uma linha para cada recurso do catálogo,
+  // DESABILITADA se ainda não existir (não altera o que o super admin configurou).
+  const outrosPlanos = await prisma.plano.findMany({
+    where: { id: { notIn: [IDS.planoTeste, IDS.planoProfissional] } },
+    select: { id: true },
+  });
+  for (const plano of outrosPlanos) {
+    await prisma.planoRecurso.createMany({
+      data: CATALOGO_RECURSOS.map((r) => ({
+        plano_id: plano.id,
+        recurso_codigo: r.codigo,
+        habilitado: false,
+        limite: null,
+        periodo: 'total' as const,
+      })),
+      skipDuplicates: true,
+    });
+  }
+
   // --- Clínica demo
   const clinicaId = IDS.clinicaDemo;
   await prisma.clinica.upsert({
@@ -113,6 +143,7 @@ async function main() {
     create: {
       id: clinicaId,
       nome: 'Clínica Demo',
+      slug: 'clinica-demo',
       documento: '11222333000181',
       responsavel: 'Administrador Demo',
       email: 'contato@demo.local',
@@ -120,6 +151,14 @@ async function main() {
       cidade: 'São Paulo',
       uf: 'SP',
     },
+    update: {},
+  });
+  // Clínicas antigas sem slug (ex.: banco criado antes da migration fase2_produto): garante o da demo.
+  await prisma.clinica.updateMany({ where: { id: clinicaId, slug: null }, data: { slug: 'clinica-demo' } });
+  // Agendamento online já ligado na demo: http://localhost:5173/agendar/clinica-demo
+  await prisma.configuracaoClinica.upsert({
+    where: { clinica_id: clinicaId },
+    create: { clinica_id: clinicaId, ao_ativo: true, ao_mensagem_boas_vindas: 'Escolha o profissional e o melhor horário.' },
     update: {},
   });
   await prisma.assinatura.upsert({

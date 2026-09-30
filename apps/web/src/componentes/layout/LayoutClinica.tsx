@@ -9,6 +9,8 @@ import { Carregando } from '@/componentes/comum';
 import { Badge } from '@/componentes/ui/badge';
 import { Estrutura } from './Estrutura';
 import { SinoAvisos } from './SinoAvisos';
+import AvisoTopoSolicitacoes from '@/paginas/clinica/solicitacoes/AvisoTopoSolicitacoes';
+import AvisoTopoListaEspera from '@/paginas/clinica/lista-espera/AvisoTopoListaEspera';
 
 export function LayoutClinica() {
   const { data: me } = useMe();
@@ -24,15 +26,27 @@ export function LayoutClinica() {
   const somenteLeitura = me.assinatura?.somente_leitura;
   const status = me.assinatura?.status;
   // Avisos de cancelamento via WhatsApp: admin e recepção, se o plano tiver WhatsApp.
-  const mostrarAvisos = (me.papel === 'admin' || me.papel === 'recepcao') && !!me.recursos.whatsapp?.habilitado;
+  const equipe = me.papel === 'admin' || me.papel === 'recepcao';
+  const mostrarAvisos = equipe && !!me.recursos.whatsapp?.habilitado;
+  // Fase 2: avisos no topo de cada módulo (componentes dos donos — docs/FASE2.md).
+  const mostrarSolicitacoes = equipe && !!me.recursos.agendamento_online?.habilitado;
+  const mostrarListaEspera = equipe && !!me.recursos.lista_espera?.habilitado;
+  const acoesTopo =
+    mostrarAvisos || mostrarSolicitacoes || mostrarListaEspera ? (
+      <>
+        {mostrarSolicitacoes && <AvisoTopoSolicitacoes />}
+        {mostrarListaEspera && <AvisoTopoListaEspera />}
+        {mostrarAvisos && <SinoAvisos />}
+      </>
+    ) : null;
 
   return (
     <Estrutura
-      itens={itensPermitidos(MENU_CLINICA, me.papel)}
+      itens={itensPermitidos(MENU_CLINICA, me.papel, me.recursos)}
       subtitulo={<span className="font-medium text-foreground">{me.clinica.nome}</span>}
       usuario={{ nome: me.usuario.nome, detalhe: `${ROTULOS_PAPEL[me.papel]} · ${me.usuario.email}` }}
       aoSair={sair}
-      acoesTopo={mostrarAvisos ? <SinoAvisos /> : null}
+      acoesTopo={acoesTopo}
       rodapeSidebar={
         <div className="space-y-1.5 text-xs">
           <div className="text-muted-foreground">Plano</div>

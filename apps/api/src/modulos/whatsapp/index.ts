@@ -66,7 +66,17 @@ const Paginacao = z.object({
   pagina: z.coerce.number().int().min(1).default(1),
   por_pagina: z.coerce.number().int().min(1).max(100).default(20),
   direcao: z.enum(['entrada', 'saida']).optional(),
-  tipo: z.enum(['lembrete', 'confirmacao', 'aviso']).optional(),
+  tipo: z
+    .enum([
+      'lembrete',
+      'confirmacao',
+      'aviso',
+      'agendamento_confirmado',
+      'agendamento_recusado',
+      'oferta_horario',
+      'convite_retorno',
+    ])
+    .optional(),
 });
 
 const selecaoMensagem = {

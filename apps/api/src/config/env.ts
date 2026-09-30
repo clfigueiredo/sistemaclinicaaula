@@ -34,6 +34,17 @@ const esquemaEnv = z.object({
   WPPCONNECT_SECRET_KEY: z.string().default(''),
   WEBHOOK_TOKEN: z.string().default(''),
   TZ_PADRAO: z.string().default('America/Sao_Paulo'),
+  /**
+   * Chave AES-256-GCM (32 bytes em 64 caracteres hex) para cifrar segredos no banco (credenciais dos
+   * gateways de pagamento — utils/cripto.ts). OBRIGATÓRIA em produção; em dev/teste, se ausente, usa uma
+   * chave fixa de desenvolvimento (com aviso). Gere com: openssl rand -hex 32.
+   * ATENÇÃO: trocar a chave torna ilegíveis os segredos já gravados (recadastre as credenciais).
+   */
+  CHAVE_CRIPTOGRAFIA: z.string().default(''),
+  /** URL pública da API (monta as URLs de webhook dos gateways: <API_URL_PUBLICA>/webhooks/pagamentos/<gateway>). */
+  API_URL_PUBLICA: z.string().default('http://localhost:3333'),
+  /** URL pública do front (links em mensagens, ex.: /agendar/<slug>). Padrão: a primeira origem de WEB_URL. */
+  WEB_URL_PUBLICA: z.string().default(''),
 });
 
 const resultado = esquemaEnv.safeParse(process.env);
@@ -49,7 +60,15 @@ if (!resultado.success) {
 const PALAVRAS_DE_EXEMPLO = ['troque', 'exemplo', 'changeme'];
 const MIN_SEGREDO = 32;
 
-type EnvSegredos = Pick<z.infer<typeof esquemaEnv>, 'JWT_SECRET' | 'WEBHOOK_TOKEN' | 'WPPCONNECT_SECRET_KEY' | 'REDIS_URL'>;
+type EnvSegredos = Pick<z.infer<typeof esquemaEnv>, 'JWT_SECRET' | 'WEBHOOK_TOKEN' | 'WPPCONNECT_SECRET_KEY' | 'REDIS_URL'> &
+  Partial<Pick<z.infer<typeof esquemaEnv>, 'CHAVE_CRIPTOGRAFIA'>>;
+
+/** Chave de DESENVOLVIMENTO (pública, só dev/teste). Nunca usada em produção (a API não sobe). */
+export const CHAVE_CRIPTOGRAFIA_DEV = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff';
+
+export function chaveCriptografiaValida(valor: string | undefined): boolean {
+  return /^[0-9a-fA-F]{64}$/.test(valor ?? '');
+}
 
 /** Lista os problemas de segurança da configuração (vazia = ok). Exportada para testes. */
 export function problemasDeSeguranca(e: EnvSegredos): string[] {
@@ -70,6 +89,11 @@ export function problemasDeSeguranca(e: EnvSegredos): string[] {
     problemas.push('REDIS_URL inválida.');
   }
   if (!senhaRedis) problemas.push('REDIS_URL deve incluir senha (redis://:SENHA@host:6379).');
+  if (!chaveCriptografiaValida(e.CHAVE_CRIPTOGRAFIA)) {
+    problemas.push('CHAVE_CRIPTOGRAFIA deve ter 64 caracteres hexadecimais (gere com: openssl rand -hex 32).');
+  } else if (e.CHAVE_CRIPTOGRAFIA!.toLowerCase() === CHAVE_CRIPTOGRAFIA_DEV) {
+    problemas.push('CHAVE_CRIPTOGRAFIA é a chave de desenvolvimento. Gere uma chave nova.');
+  }
   return problemas;
 }
 
@@ -110,6 +134,14 @@ export const env = {
   ORIGENS_WEB: resultado.data.WEB_URL.split(',').map((s) => s.trim()).filter(Boolean),
   /** TRUST_PROXY já convertido para o Fastify. */
   TRUST_PROXY_FASTIFY: interpretarTrustProxy(resultado.data.TRUST_PROXY),
+  /** Chave efetiva (hex) usada por utils/cripto.ts: a configurada ou, fora de produção, a de desenvolvimento. */
+  CHAVE_CRIPTOGRAFIA_EFETIVA: chaveCriptografiaValida(resultado.data.CHAVE_CRIPTOGRAFIA)
+    ? resultado.data.CHAVE_CRIPTOGRAFIA.toLowerCase()
+    : CHAVE_CRIPTOGRAFIA_DEV,
+  /** URL pública do front sem barra final (WEB_URL_PUBLICA ou a primeira origem de WEB_URL). */
+  WEB_URL_PUBLICA: (resultado.data.WEB_URL_PUBLICA || resultado.data.WEB_URL.split(',')[0]!.trim()).replace(/\/+$/, ''),
+  /** URL pública da API sem barra final. */
+  API_URL_PUBLICA: resultado.data.API_URL_PUBLICA.replace(/\/+$/, ''),
 };
 
 export type Env = typeof env;

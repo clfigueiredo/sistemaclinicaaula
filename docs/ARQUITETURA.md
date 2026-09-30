@@ -14,7 +14,7 @@ Dois ambientes dentro do mesmo app React:
 |---|---|---|
 | Painel Super Admin | dono do SaaS | `/admin/*` |
 | App da Clínica | admin da clínica, recepção, profissional | `/*` |
-| Público | visitante | `/cadastro`, `/login` |
+| Público | visitante | `/cadastro`, `/login`, `/agendar/:slug` (agendamento online, fase 2) |
 
 ## 2. Stack
 
@@ -47,8 +47,12 @@ Dois ambientes dentro do mesmo app React:
 | `max_anexos` | limite | arquivos de exame anexados |
 | `whatsapp` | liga/desliga | permite conectar número |
 | `max_mensagens` | limite | mensagens WhatsApp enviadas |
-| `financeiro` | liga/desliga | fase 2 |
-| `agendamento_online` | liga/desliga | fase 2 |
+| `financeiro` | liga/desliga | caixa, contas a pagar/receber, recorrências, repasses (fase 2) |
+| `agendamento_online` | liga/desliga | página pública de solicitação de horários (fase 2) |
+| `lista_espera` | liga/desliga | lista de espera + sugestões ao cancelar (fase 2) |
+| `documentos_pdf` | liga/desliga | receituário, atestado, declaração, pedido de exame em PDF (fase 2) |
+| `retorno_automatico` | liga/desliga | retornos com convite pelo WhatsApp (fase 2) |
+| `dashboard` | liga/desliga | KPIs da agenda e do financeiro (fase 2) |
 
 Convenções:
 - limite `null` = ilimitado;
@@ -117,8 +121,16 @@ paciente de um agendamento (`PUT /agendamentos/:id` ⇒ 403) e ninguém troca o 
 
 - `usuarios_plataforma` — super admins
 - `planos`, `plano_recursos`
-- `clinicas` — nome, documento, telefone, endereço, status
-- `assinaturas` — clinica_id, plano_id, status, inicio, expira_em
+- `clinicas` — nome, documento, telefone, endereço, status, `slug` (único; URL pública `/agendar/:slug`)
+- `assinaturas` — clinica_id, plano_id, status, inicio, expira_em; cobrança automática: `gateway`
+  (`asaas|stripe|mercado_pago`), `cliente_externo_id`, `assinatura_externa_id`, `dia_vencimento` (1–28)
+- `gateways_pagamento` — provedor (único), ambiente `sandbox|producao`, ativo (só um — índice parcial),
+  `credenciais_cifradas` / `segredo_webhook_cifrado` (AES-256-GCM, `CHAVE_CRIPTOGRAFIA`), `*_final` (últimos 4),
+  dias_tolerancia, metodos (`pix|boleto|cartao`)
+- `cobrancas` — clinica_id, assinatura_id, gateway, id_externo (único por gateway), valor, vencimento, status
+  `pendente|paga|vencida|cancelada|estornada`, metodo, link_pagamento, pago_em, payload. Plataforma, mas a
+  clínica lê as próprias via `request.db` (somente leitura, filtrada)
+- `eventos_gateway` — webhooks recebidos; idempotência por `(gateway, id_evento)`
 
 ### Clínica (todas com `clinica_id`)
 
@@ -133,8 +145,41 @@ paciente de um agendamento (`PUT /agendamentos/:id` ⇒ 403) e ninguém troca o 
 - `paciente_alergias` / `paciente_medicacoes`
 - `anexos` — paciente_id, registro_id, nome_arquivo, caminho, tamanho, enviado_por
 - `whatsapp_sessoes` — status da conexão
-- `mensagens_whatsapp` — agendamento_id, paciente_id, telefone, tipo (`lembrete|confirmacao|aviso`), direcao, conteudo, status, id_externo, enviada_em, lida_em (avisos à recepção: nulo = não lido). Índice único parcial `(clinica_id, id_externo)` para mensagens de entrada (idempotência do webhook).
+- `mensagens_whatsapp` — agendamento_id, paciente_id, telefone, tipo (`lembrete|confirmacao|aviso` + fase 2:
+  `agendamento_confirmado|agendamento_recusado|oferta_horario|convite_retorno`), direcao, conteudo, status,
+  id_externo, enviada_em, lida_em (avisos à recepção: nulo = não lido), `consentimento_externo` (mensagem sem
+  paciente cadastrado, com consentimento dado no formulário público). Índice único parcial `(clinica_id, id_externo)`
+  para mensagens de entrada (idempotência do webhook).
 - `logs_acesso` — usuario_id, acao, entidade, entidade_id, ip, criado_em
+
+#### Fase 2 do produto (contratos em `docs/FASE2.md`)
+
+- `profissionais` + `percentual_repasse` (0–100, null = sem repasse) e `agendamento_online` (visível na página pública)
+- `configuracoes_clinica` (1:1, criada sob demanda) — agendamento online (`ao_ativo`, `ao_antecedencia_min_horas`,
+  `ao_dias_a_frente`, `ao_mensagem_boas_vindas`, `ao_max_pendentes_por_telefone`) e retorno
+  (`retorno_convite_ativo`, `retorno_dias_antecedencia`)
+- `contas_financeiras` — nome (único na clínica), tipo `caixa|banco|carteira_digital|outro`, saldo_inicial, ativo
+- `categorias_financeiras` — nome, tipo `receita|despesa`, padrao, ativo
+- `movimentacoes_financeiras` — tipo `entrada|saida`, origem `manual|consulta|titulo|repasse|estorno`, data
+  (dia), valor (> 0), conta_financeira_id, categoria_id, forma_pagamento (`dinheiro|pix|cartao_credito|
+  cartao_debito|boleto|transferencia|convenio|outro`), descricao, agendamento_id, paciente_id, profissional_id,
+  titulo_id, `estorno_de_id` (único), repasse_inicio/fim, criado_por. **Sem exclusão**: estorno = movimentação inversa
+- `titulos` — contas a pagar/receber: tipo `pagar|receber`, descricao, valor, vencimento, status
+  `aberto|pago|cancelado` ("vencido" é derivado), categoria, paciente, profissional, fornecedor (texto),
+  parcela_numero/total + grupo_parcelas_id, recorrencia_id + competencia (único — geração idempotente),
+  pago_em, valor_pago, cancelado_em
+- `recorrencias` — modelo mensal que gera títulos: tipo, descricao, valor, dia_vencimento (1–31), inicio, fim,
+  ativo, categoria/paciente/profissional/fornecedor, ultima_competencia (job diário + geração ao criar)
+- `solicitacoes_agendamento` — pedidos da página pública: profissional, inicio/fim, status
+  `pendente|aprovada|recusada|expirada`, nome, telefone, email, cpf, nascimento, observacoes, aceita_whatsapp,
+  paciente_id/agendamento_id (na aprovação), motivo_recusa, analisado_por/em, ip, user_agent
+- `lista_espera` — paciente, profissional (opcional), dias_semana (int[]), turnos (`manha|tarde|noite`[]),
+  observacao, status `aguardando|agendado|removido`, agendamento_id, ultima_oferta_em
+- `documentos_clinicos` — tipo `receita|atestado|declaracao|pedido_exame`, paciente, profissional, agendamento,
+  autor, titulo, conteudo, metadados (json). **Imutável** (extensão + trigger, como o prontuário); PDF gerado
+  sob demanda com `pdfkit`; log de acesso LGPD
+- `retornos` — paciente, profissional, agendamento_origem_id (único), data_prevista, status
+  `pendente|agendado|lembrado|cancelado`, agendamento_retorno_id, observacao, convite_enviado_em
 
 Status de agendamento: `agendado → confirmado → compareceu → atendido`, além de `cancelado` e `faltou`.
 
@@ -166,4 +211,7 @@ O contrato inicial previa `GET /bloqueios`; ficou assim (sem alias):
 ## 10. Fases
 
 - **Fase 1 (MVP):** tudo acima.
-- **Fase 2:** financeiro simples, lista de espera, receituário/atestado PDF, retorno automático, dashboard, agendamento online, cobrança automática (Asaas/Stripe).
+- **Fase 2 do produto (em andamento):** financeiro (caixa, contas a pagar/receber, recorrências, repasses),
+  agendamento online com aprovação pela recepção, lista de espera, receituário/atestado PDF, retorno
+  automático, dashboard da clínica e cobrança automática do SaaS (Asaas, Stripe e Mercado Pago). Fundação
+  (schema, migration `fase2_produto`, stubs, rotas, contratos) pronta — ver `docs/FASE2.md`.

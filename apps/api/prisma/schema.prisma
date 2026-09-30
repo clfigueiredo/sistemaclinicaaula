@@ -106,6 +106,14 @@ enum TipoMensagem {
   lembrete
   confirmacao
   aviso
+  /// Fase 2: solicitação de agendamento online aprovada ("sua consulta está agendada").
+  agendamento_confirmado
+  /// Fase 2: solicitação de agendamento online recusada (com motivo, opcional).
+  agendamento_recusado
+  /// Fase 2: oferta de horário vago para paciente da lista de espera.
+  oferta_horario
+  /// Fase 2: convite para agendar o retorno.
+  convite_retorno
 
   @@map("tipo_mensagem")
 }
@@ -124,6 +132,159 @@ enum StatusMensagem {
   recebida
 
   @@map("status_mensagem")
+}
+
+// --- Fase 2 do produto -------------------------------------------------------
+
+enum FormaPagamento {
+  dinheiro
+  pix
+  cartao_credito
+  cartao_debito
+  boleto
+  transferencia
+  convenio
+  outro
+
+  @@map("forma_pagamento")
+}
+
+enum TipoContaFinanceira {
+  caixa
+  banco
+  carteira_digital
+  outro
+
+  @@map("tipo_conta_financeira")
+}
+
+enum TipoCategoriaFinanceira {
+  receita
+  despesa
+
+  @@map("tipo_categoria_financeira")
+}
+
+enum TipoMovimentacao {
+  entrada
+  saida
+
+  @@map("tipo_movimentacao")
+}
+
+/// De onde veio a movimentação (relatórios e regras de estorno).
+enum OrigemMovimentacao {
+  /// Lançamento avulso de entrada/saída.
+  manual
+  /// Recebimento vinculado a um agendamento (consulta).
+  consulta
+  /// Baixa de um título (conta a pagar/receber).
+  titulo
+  /// Pagamento de repasse/comissão ao profissional.
+  repasse
+  /// Estorno de outra movimentação (estorno_de_id preenchido).
+  estorno
+
+  @@map("origem_movimentacao")
+}
+
+enum TipoTitulo {
+  pagar
+  receber
+
+  @@map("tipo_titulo")
+}
+
+/// "vencido" NÃO é status: é derivado (status = aberto e vencimento < hoje no fuso da clínica).
+enum StatusTitulo {
+  aberto
+  pago
+  cancelado
+
+  @@map("status_titulo")
+}
+
+enum FrequenciaRecorrencia {
+  mensal
+
+  @@map("frequencia_recorrencia")
+}
+
+enum StatusSolicitacaoAgendamento {
+  pendente
+  aprovada
+  recusada
+  expirada
+
+  @@map("status_solicitacao_agendamento")
+}
+
+enum StatusListaEspera {
+  aguardando
+  agendado
+  removido
+
+  @@map("status_lista_espera")
+}
+
+enum Turno {
+  manha
+  tarde
+  noite
+
+  @@map("turno")
+}
+
+enum TipoDocumentoClinico {
+  receita
+  atestado
+  declaracao
+  pedido_exame
+
+  @@map("tipo_documento_clinico")
+}
+
+enum StatusRetorno {
+  pendente
+  agendado
+  lembrado
+  cancelado
+
+  @@map("status_retorno")
+}
+
+/// Gateways de cobrança do SaaS (plataforma).
+enum ProvedorPagamento {
+  asaas
+  stripe
+  mercado_pago
+
+  @@map("provedor_pagamento")
+}
+
+enum AmbienteGateway {
+  sandbox
+  producao
+
+  @@map("ambiente_gateway")
+}
+
+enum MetodoCobranca {
+  pix
+  boleto
+  cartao
+
+  @@map("metodo_cobranca")
+}
+
+enum StatusCobranca {
+  pendente
+  paga
+  vencida
+  cancelada
+  estornada
+
+  @@map("status_cobranca")
 }
 
 // ----------------------------------------------------------------------------
@@ -201,46 +362,142 @@ model Clinica {
   uf            String?       @db.VarChar(2)
   cep           String?
   fuso_horario  String        @default("America/Sao_Paulo")
+  /// Identificador público (URL do agendamento online: /agendar/:slug). Minúsculas, dígitos e hífen.
+  /// Gerado a partir do nome (utils/slug.ts) no auto-cadastro e pela migration fase2_produto;
+  /// nullable só para não quebrar criações antigas/testes — sem slug, não há agendamento online.
+  slug          String?       @unique
   status        StatusClinica @default(ativa)
   criado_em     DateTime      @default(now())
   atualizado_em DateTime      @updatedAt
 
-  assinatura           Assinatura?
-  usuarios             Usuario[]
-  profissionais        Profissional[]
-  profissional_horarios ProfissionalHorario[]
-  bloqueios_agenda     BloqueioAgenda[]
-  convenios            Convenio[]
-  pacientes            Paciente[]
-  paciente_alergias    PacienteAlergia[]
-  paciente_medicacoes  PacienteMedicacao[]
-  agendamentos         Agendamento[]
-  prontuario_registros ProntuarioRegistro[]
-  anexos               Anexo[]
-  whatsapp_sessao      WhatsappSessao?
-  mensagens_whatsapp   MensagemWhatsapp[]
-  logs_acesso          LogAcesso[]
+  assinatura                Assinatura?
+  cobrancas                 Cobranca[]
+  configuracao              ConfiguracaoClinica?
+  contas_financeiras        ContaFinanceira[]
+  categorias_financeiras    CategoriaFinanceira[]
+  movimentacoes_financeiras MovimentacaoFinanceira[]
+  titulos                   Titulo[]
+  recorrencias              Recorrencia[]
+  solicitacoes_agendamento  SolicitacaoAgendamento[]
+  lista_espera              ListaEspera[]
+  documentos_clinicos       DocumentoClinico[]
+  retornos                  Retorno[]
+  usuarios                  Usuario[]
+  profissionais             Profissional[]
+  profissional_horarios     ProfissionalHorario[]
+  bloqueios_agenda          BloqueioAgenda[]
+  convenios                 Convenio[]
+  pacientes                 Paciente[]
+  paciente_alergias         PacienteAlergia[]
+  paciente_medicacoes       PacienteMedicacao[]
+  agendamentos              Agendamento[]
+  prontuario_registros      ProntuarioRegistro[]
+  anexos                    Anexo[]
+  whatsapp_sessao           WhatsappSessao?
+  mensagens_whatsapp        MensagemWhatsapp[]
+  logs_acesso               LogAcesso[]
 
   @@map("clinicas")
 }
 
 /// Assinatura ATUAL da clínica (uma por clínica). Troca de plano = update.
 model Assinatura {
-  id            String           @id @default(uuid()) @db.Uuid
-  clinica_id    String           @unique @db.Uuid
-  plano_id      String           @db.Uuid
-  status        StatusAssinatura @default(teste)
-  inicio        DateTime         @default(now())
+  id                    String             @id @default(uuid()) @db.Uuid
+  clinica_id            String             @unique @db.Uuid
+  plano_id              String             @db.Uuid
+  status                StatusAssinatura   @default(teste)
+  inicio                DateTime           @default(now())
   /// null = não expira (ex.: teste grátis).
-  expira_em     DateTime?
-  criado_em     DateTime         @default(now())
-  atualizado_em DateTime         @updatedAt
+  expira_em             DateTime?
+  /// Cobrança automática (fase 2): gateway em que a clínica é cobrada (null = cobrança manual).
+  gateway               ProvedorPagamento?
+  /// ID do cliente no gateway (Asaas customer, Stripe customer, Mercado Pago payer).
+  cliente_externo_id    String?
+  /// ID da assinatura recorrente no gateway (quando o gateway gerencia a recorrência).
+  assinatura_externa_id String?
+  /// Dia do mês (1–28) do vencimento da mensalidade.
+  dia_vencimento        Int?               @db.SmallInt
+  criado_em             DateTime           @default(now())
+  atualizado_em         DateTime           @updatedAt
 
-  clinica Clinica @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
-  plano   Plano   @relation(fields: [plano_id], references: [id])
+  clinica   Clinica    @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  plano     Plano      @relation(fields: [plano_id], references: [id])
+  cobrancas Cobranca[]
 
   @@index([plano_id])
+  @@index([gateway, assinatura_externa_id])
   @@map("assinaturas")
+}
+
+/// Configuração de um gateway de cobrança do SaaS (plataforma; um registro por provedor).
+/// Credenciais SEMPRE cifradas (utils/cripto.ts, AES-256-GCM com CHAVE_CRIPTOGRAFIA); a API nunca
+/// devolve o segredo em claro — só os últimos 4 caracteres (`*_final`).
+/// Só um gateway pode estar ativo (índice único parcial em `ativo = true`, SQL manual na migration).
+model GatewayPagamento {
+  id                      String            @id @default(uuid()) @db.Uuid
+  provedor                ProvedorPagamento @unique
+  ambiente                AmbienteGateway   @default(sandbox)
+  ativo                   Boolean           @default(false)
+  /// JSON cifrado com as credenciais do provedor (ex.: { api_key } / { secret_key, publishable_key } / { access_token }).
+  credenciais_cifradas    String?
+  /// Últimos 4 caracteres da credencial principal (exibição).
+  credenciais_final       String?           @db.VarChar(4)
+  /// Segredo/token de validação do webhook, cifrado.
+  segredo_webhook_cifrado String?
+  segredo_webhook_final   String?           @db.VarChar(4)
+  /// Dias após o vencimento antes de a assinatura virar `vencida`/`bloqueada`.
+  dias_tolerancia         Int               @default(5)
+  metodos                 MetodoCobranca[]  @default([pix, boleto])
+  criado_em               DateTime          @default(now())
+  atualizado_em           DateTime          @updatedAt
+
+  @@map("gateways_pagamento")
+}
+
+/// Cobrança (fatura) do SaaS para uma clínica (plataforma: tem clinica_id, mas NÃO é modelo de clínica.
+/// Via request.db é somente leitura e filtrada pela clínica do token — ver tenant.ts).
+model Cobranca {
+  id             String            @id @default(uuid()) @db.Uuid
+  clinica_id     String            @db.Uuid
+  assinatura_id  String?           @db.Uuid
+  gateway        ProvedorPagamento
+  /// ID da cobrança no gateway (payment id / invoice id).
+  id_externo     String?
+  descricao      String?
+  valor          Decimal           @db.Decimal(10, 2)
+  vencimento     DateTime          @db.Date
+  status         StatusCobranca    @default(pendente)
+  metodo         MetodoCobranca?
+  link_pagamento String?
+  pago_em        DateTime?
+  /// Último payload relevante do gateway (auditoria).
+  payload        Json?
+  criado_em      DateTime          @default(now())
+  atualizado_em  DateTime          @updatedAt
+
+  clinica    Clinica     @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  assinatura Assinatura? @relation(fields: [assinatura_id], references: [id], onDelete: SetNull)
+
+  @@unique([gateway, id_externo])
+  @@index([clinica_id, vencimento])
+  @@index([status, vencimento])
+  @@map("cobrancas")
+}
+
+/// Webhooks recebidos dos gateways (plataforma). Idempotência: (gateway, id_evento) único.
+model EventoGateway {
+  id            String            @id @default(uuid()) @db.Uuid
+  gateway       ProvedorPagamento
+  id_evento     String
+  tipo          String
+  payload       Json
+  processado_em DateTime?
+  erro          String?
+  recebido_em   DateTime          @default(now())
+
+  @@unique([gateway, id_evento])
+  @@index([recebido_em])
+  @@map("eventos_gateway")
 }
 
 // ----------------------------------------------------------------------------
@@ -248,28 +505,30 @@ model Assinatura {
 // ----------------------------------------------------------------------------
 
 model Usuario {
-  id              String       @id @default(uuid()) @db.Uuid
-  clinica_id      String       @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
-  nome            String
-  email           String
-  senha_hash      String
-  papel           PapelUsuario
+  id                String       @id @default(uuid()) @db.Uuid
+  clinica_id        String       @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
+  nome              String
+  email             String
+  senha_hash        String
+  papel             PapelUsuario
   /// Vínculo opcional com um profissional (obrigatório para papel `profissional`; opcional para `admin`).
-  profissional_id String?      @unique @db.Uuid
-  ativo           Boolean      @default(true)
-  ultimo_acesso_em DateTime?
+  profissional_id   String?      @unique @db.Uuid
+  ativo             Boolean      @default(true)
+  ultimo_acesso_em  DateTime?
   /// Última troca/redefinição de senha: tokens emitidos antes disso são recusados (autenticarClinica).
   senha_alterada_em DateTime?
-  criado_em       DateTime     @default(now())
-  atualizado_em   DateTime     @updatedAt
+  criado_em         DateTime     @default(now())
+  atualizado_em     DateTime     @updatedAt
 
   clinica      Clinica       @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
   profissional Profissional? @relation(fields: [profissional_id], references: [id], onDelete: SetNull)
 
-  agendamentos_criados Agendamento[]        @relation("AgendamentoCriadoPor")
-  registros_prontuario ProntuarioRegistro[] @relation("RegistroAutor")
-  anexos_enviados      Anexo[]              @relation("AnexoEnviadoPor")
-  logs_acesso          LogAcesso[]
+  agendamentos_criados  Agendamento[]            @relation("AgendamentoCriadoPor")
+  registros_prontuario  ProntuarioRegistro[]     @relation("RegistroAutor")
+  anexos_enviados       Anexo[]                  @relation("AnexoEnviadoPor")
+  logs_acesso           LogAcesso[]
+  documentos_emitidos   DocumentoClinico[]       @relation("DocumentoAutor")
+  movimentacoes_criadas MovimentacaoFinanceira[] @relation("MovimentacaoCriadaPor")
 
   @@unique([clinica_id, email])
   @@index([clinica_id])
@@ -289,15 +548,26 @@ model Profissional {
   duracao_consulta_min Int      @default(30)
   cor_agenda           String   @default("#0d9488")
   ativo                Boolean  @default(true)
+  /// Fase 2 (financeiro): % de repasse/comissão sobre as entradas vinculadas ao profissional (0–100; null = sem repasse).
+  percentual_repasse   Decimal? @db.Decimal(5, 2)
+  /// Fase 2 (agendamento online): aparece na página pública /agendar/:slug.
+  agendamento_online   Boolean  @default(true)
   criado_em            DateTime @default(now())
   atualizado_em        DateTime @updatedAt
 
-  clinica      Clinica               @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
-  usuario      Usuario?
-  horarios     ProfissionalHorario[]
-  bloqueios    BloqueioAgenda[]
-  agendamentos Agendamento[]
-  registros    ProntuarioRegistro[]
+  clinica                   Clinica                  @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  usuario                   Usuario?
+  horarios                  ProfissionalHorario[]
+  bloqueios                 BloqueioAgenda[]
+  agendamentos              Agendamento[]
+  registros                 ProntuarioRegistro[]
+  movimentacoes_financeiras MovimentacaoFinanceira[]
+  titulos                   Titulo[]
+  recorrencias              Recorrencia[]
+  solicitacoes_agendamento  SolicitacaoAgendamento[]
+  lista_espera              ListaEspera[]
+  documentos_clinicos       DocumentoClinico[]
+  retornos                  Retorno[]
 
   @@index([clinica_id])
   @@index([clinica_id, ativo])
@@ -380,14 +650,21 @@ model Paciente {
   criado_em          DateTime  @default(now())
   atualizado_em      DateTime  @updatedAt
 
-  clinica      Clinica              @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
-  convenio     Convenio?            @relation(fields: [convenio_id], references: [id], onDelete: SetNull)
-  alergias     PacienteAlergia[]
-  medicacoes   PacienteMedicacao[]
-  agendamentos Agendamento[]
-  registros    ProntuarioRegistro[]
-  anexos       Anexo[]
-  mensagens    MensagemWhatsapp[]
+  clinica                   Clinica                  @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  convenio                  Convenio?                @relation(fields: [convenio_id], references: [id], onDelete: SetNull)
+  alergias                  PacienteAlergia[]
+  medicacoes                PacienteMedicacao[]
+  agendamentos              Agendamento[]
+  registros                 ProntuarioRegistro[]
+  anexos                    Anexo[]
+  mensagens                 MensagemWhatsapp[]
+  movimentacoes_financeiras MovimentacaoFinanceira[]
+  titulos                   Titulo[]
+  recorrencias              Recorrencia[]
+  solicitacoes_agendamento  SolicitacaoAgendamento[]
+  lista_espera              ListaEspera[]
+  documentos_clinicos       DocumentoClinico[]
+  retornos                  Retorno[]
 
   @@unique([clinica_id, cpf])
   @@index([clinica_id])
@@ -449,13 +726,19 @@ model Agendamento {
   criado_em           DateTime          @default(now())
   atualizado_em       DateTime          @updatedAt
 
-  clinica      Clinica              @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
-  paciente     Paciente             @relation(fields: [paciente_id], references: [id], onDelete: Restrict)
-  profissional Profissional         @relation(fields: [profissional_id], references: [id], onDelete: Restrict)
-  convenio     Convenio?            @relation(fields: [convenio_id], references: [id], onDelete: SetNull)
-  criador      Usuario?             @relation("AgendamentoCriadoPor", fields: [criado_por], references: [id], onDelete: SetNull)
-  registros    ProntuarioRegistro[]
-  mensagens    MensagemWhatsapp[]
+  clinica                   Clinica                  @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  paciente                  Paciente                 @relation(fields: [paciente_id], references: [id], onDelete: Restrict)
+  profissional              Profissional             @relation(fields: [profissional_id], references: [id], onDelete: Restrict)
+  convenio                  Convenio?                @relation(fields: [convenio_id], references: [id], onDelete: SetNull)
+  criador                   Usuario?                 @relation("AgendamentoCriadoPor", fields: [criado_por], references: [id], onDelete: SetNull)
+  registros                 ProntuarioRegistro[]
+  mensagens                 MensagemWhatsapp[]
+  movimentacoes_financeiras MovimentacaoFinanceira[]
+  solicitacao_agendamento   SolicitacaoAgendamento?
+  lista_espera              ListaEspera[]
+  documentos_clinicos       DocumentoClinico[]
+  retornos_originados       Retorno[]                @relation("RetornoOrigem")
+  retornos_agendados        Retorno[]                @relation("RetornoAgendamento")
 
   @@index([clinica_id])
   @@index([clinica_id, inicio])
@@ -479,13 +762,13 @@ model ProntuarioRegistro {
   corrige_registro_id String?  @db.Uuid
   criado_em           DateTime @default(now())
 
-  clinica      Clinica             @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
-  paciente     Paciente            @relation(fields: [paciente_id], references: [id], onDelete: Restrict)
+  clinica      Clinica              @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  paciente     Paciente             @relation(fields: [paciente_id], references: [id], onDelete: Restrict)
   // Restrict (e não SetNull): SetNull faria UPDATE no prontuário, bloqueado pelo trigger de imutabilidade.
-  profissional Profissional?       @relation(fields: [profissional_id], references: [id], onDelete: Restrict)
-  agendamento  Agendamento?        @relation(fields: [agendamento_id], references: [id], onDelete: Restrict)
-  autor        Usuario?            @relation("RegistroAutor", fields: [autor_id], references: [id], onDelete: Restrict)
-  corrige      ProntuarioRegistro? @relation("Correcao", fields: [corrige_registro_id], references: [id], onDelete: Restrict)
+  profissional Profissional?        @relation(fields: [profissional_id], references: [id], onDelete: Restrict)
+  agendamento  Agendamento?         @relation(fields: [agendamento_id], references: [id], onDelete: Restrict)
+  autor        Usuario?             @relation("RegistroAutor", fields: [autor_id], references: [id], onDelete: Restrict)
+  corrige      ProntuarioRegistro?  @relation("Correcao", fields: [corrige_registro_id], references: [id], onDelete: Restrict)
   correcoes    ProntuarioRegistro[] @relation("Correcao")
   anexos       Anexo[]
 
@@ -537,23 +820,27 @@ model WhatsappSessao {
 }
 
 model MensagemWhatsapp {
-  id             String          @id @default(uuid()) @db.Uuid
-  clinica_id     String          @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
-  agendamento_id String?         @db.Uuid
-  paciente_id    String?         @db.Uuid
-  telefone       String
+  id                    String          @id @default(uuid()) @db.Uuid
+  clinica_id            String          @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
+  agendamento_id        String?         @db.Uuid
+  paciente_id           String?         @db.Uuid
+  telefone              String
   /// Nulo para mensagens de entrada.
-  tipo           TipoMensagem?
-  direcao        DirecaoMensagem
-  conteudo       String
-  status         StatusMensagem  @default(pendente)
-  erro           String?
+  tipo                  TipoMensagem?
+  direcao               DirecaoMensagem
+  conteudo              String
+  status                StatusMensagem  @default(pendente)
+  erro                  String?
   /// ID da mensagem no provedor (WPPConnect / Meta).
-  id_externo     String?
-  enviada_em     DateTime?
+  id_externo            String?
+  enviada_em            DateTime?
   /// Avisos à recepção: quando foi marcado como lido (null = não lido).
-  lida_em        DateTime?
-  criado_em      DateTime        @default(now())
+  lida_em               DateTime?
+  /// Mensagem SEM paciente cadastrado (paciente_id nulo) com consentimento dado fora do cadastro — ex.:
+  /// recusa de solicitação de agendamento online, em que o visitante marcou "aceito receber WhatsApp".
+  /// O worker só envia mensagem sem paciente se isto for true (ver servicos/whatsapp/envio.ts).
+  consentimento_externo Boolean         @default(false)
+  criado_em             DateTime        @default(now())
 
   clinica     Clinica      @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
   agendamento Agendamento? @relation(fields: [agendamento_id], references: [id], onDelete: SetNull)
@@ -586,4 +873,336 @@ model LogAcesso {
   @@index([clinica_id, criado_em])
   @@index([clinica_id, entidade, entidade_id])
   @@map("logs_acesso")
+}
+
+// ----------------------------------------------------------------------------
+// Fase 2 do produto — modelos de clínica (todos com clinica_id + MODELOS_DE_CLINICA em tenant.ts)
+// Contratos por módulo: docs/FASE2.md
+// ----------------------------------------------------------------------------
+
+/// Configurações da clínica (1:1, criada sob demanda por `obterConfiguracaoClinica` em
+/// src/servicos/configuracaoClinica.ts — nunca assuma que a linha existe).
+/// Prefixo `ao_` = agendamento online; `retorno_` = retorno automático.
+model ConfiguracaoClinica {
+  id                            String   @id @default(uuid()) @db.Uuid
+  clinica_id                    String   @unique @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
+  /// Agendamento online ligado pela clínica (além do recurso `agendamento_online` do plano).
+  ao_ativo                      Boolean  @default(false)
+  /// Antecedência mínima (horas) entre agora e o horário solicitado.
+  ao_antecedencia_min_horas     Int      @default(2)
+  /// Até quantos dias à frente o paciente pode escolher.
+  ao_dias_a_frente              Int      @default(30)
+  ao_mensagem_boas_vindas       String?
+  /// Máximo de solicitações PENDENTES por telefone (anti-abuso).
+  ao_max_pendentes_por_telefone Int      @default(2)
+  /// Envio automático do convite de retorno pelo WhatsApp.
+  retorno_convite_ativo         Boolean  @default(true)
+  /// Enviar o convite quando faltarem N dias para a data prevista do retorno.
+  retorno_dias_antecedencia     Int      @default(7)
+  criado_em                     DateTime @default(now())
+  atualizado_em                 DateTime @updatedAt
+
+  clinica Clinica @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+
+  @@map("configuracoes_clinica")
+}
+
+/// Conta financeira da clínica (ex.: "Caixa", "Banco X"). Saldo = saldo_inicial + entradas − saídas.
+model ContaFinanceira {
+  id            String              @id @default(uuid()) @db.Uuid
+  clinica_id    String              @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
+  nome          String
+  tipo          TipoContaFinanceira @default(caixa)
+  saldo_inicial Decimal             @default(0) @db.Decimal(12, 2)
+  ativo         Boolean             @default(true)
+  criado_em     DateTime            @default(now())
+  atualizado_em DateTime            @updatedAt
+
+  clinica       Clinica                  @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  movimentacoes MovimentacaoFinanceira[]
+
+  @@unique([clinica_id, nome])
+  @@index([clinica_id])
+  @@map("contas_financeiras")
+}
+
+/// Categoria de receita/despesa. `padrao` = criada automaticamente (categorias padrão por clínica, sob demanda).
+model CategoriaFinanceira {
+  id            String                  @id @default(uuid()) @db.Uuid
+  clinica_id    String                  @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
+  nome          String
+  tipo          TipoCategoriaFinanceira
+  padrao        Boolean                 @default(false)
+  ativo         Boolean                 @default(true)
+  criado_em     DateTime                @default(now())
+  atualizado_em DateTime                @updatedAt
+
+  clinica       Clinica                  @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  movimentacoes MovimentacaoFinanceira[]
+  titulos       Titulo[]
+  recorrencias  Recorrencia[]
+
+  @@unique([clinica_id, tipo, nome])
+  @@index([clinica_id])
+  @@map("categorias_financeiras")
+}
+
+/// Movimentação de caixa (entrada/saída). NUNCA é apagada: estorno = nova movimentação de tipo
+/// inverso com `estorno_de_id` (único: uma movimentação só pode ser estornada uma vez).
+/// `valor` é sempre POSITIVO; o sinal vem de `tipo`.
+model MovimentacaoFinanceira {
+  id                  String             @id @default(uuid()) @db.Uuid
+  clinica_id          String             @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
+  tipo                TipoMovimentacao
+  origem              OrigemMovimentacao @default(manual)
+  /// Data da movimentação (dia no fuso da clínica).
+  data                DateTime           @db.Date
+  valor               Decimal            @db.Decimal(12, 2)
+  conta_financeira_id String             @db.Uuid
+  categoria_id        String?            @db.Uuid
+  forma_pagamento     FormaPagamento
+  descricao           String?
+  agendamento_id      String?            @db.Uuid
+  paciente_id         String?            @db.Uuid
+  profissional_id     String?            @db.Uuid
+  /// Título (conta a pagar/receber) cuja baixa gerou esta movimentação.
+  titulo_id           String?            @db.Uuid
+  /// Movimentação estornada por esta (esta é o estorno).
+  estorno_de_id       String?            @unique @db.Uuid
+  /// Pagamento de repasse: período de referência.
+  repasse_inicio      DateTime?          @db.Date
+  repasse_fim         DateTime?          @db.Date
+  criado_por          String?            @db.Uuid
+  criado_em           DateTime           @default(now())
+
+  clinica       Clinica                 @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  conta         ContaFinanceira         @relation(fields: [conta_financeira_id], references: [id], onDelete: NoAction)
+  categoria     CategoriaFinanceira?    @relation(fields: [categoria_id], references: [id], onDelete: SetNull)
+  agendamento   Agendamento?            @relation(fields: [agendamento_id], references: [id], onDelete: SetNull)
+  paciente      Paciente?               @relation(fields: [paciente_id], references: [id], onDelete: SetNull)
+  profissional  Profissional?           @relation(fields: [profissional_id], references: [id], onDelete: SetNull)
+  titulo        Titulo?                 @relation(fields: [titulo_id], references: [id], onDelete: SetNull)
+  estorno_de    MovimentacaoFinanceira? @relation("Estorno", fields: [estorno_de_id], references: [id], onDelete: NoAction)
+  estornada_por MovimentacaoFinanceira? @relation("Estorno")
+  criador       Usuario?                @relation("MovimentacaoCriadaPor", fields: [criado_por], references: [id], onDelete: SetNull)
+
+  @@index([clinica_id])
+  @@index([clinica_id, data])
+  @@index([clinica_id, conta_financeira_id, data])
+  @@index([clinica_id, profissional_id, data])
+  @@index([clinica_id, agendamento_id])
+  @@index([clinica_id, titulo_id])
+  @@map("movimentacoes_financeiras")
+}
+
+/// Conta a pagar / a receber. Baixa ⇒ status `pago` + movimentação (origem `titulo`, titulo_id).
+/// Parcelas: mesmo `grupo_parcelas_id`, `parcela_numero`/`parcela_total`.
+/// Recorrência: `recorrencia_id` + `competencia` (1º dia do mês de referência) — único por recorrência,
+/// o que torna a geração mensal idempotente.
+model Titulo {
+  id                String          @id @default(uuid()) @db.Uuid
+  clinica_id        String          @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
+  tipo              TipoTitulo
+  descricao         String
+  valor             Decimal         @db.Decimal(12, 2)
+  vencimento        DateTime        @db.Date
+  status            StatusTitulo    @default(aberto)
+  categoria_id      String?         @db.Uuid
+  paciente_id       String?         @db.Uuid
+  profissional_id   String?         @db.Uuid
+  /// Fornecedor/credor/devedor em texto livre.
+  fornecedor        String?
+  forma_pagamento   FormaPagamento?
+  parcela_numero    Int?            @db.SmallInt
+  parcela_total     Int?            @db.SmallInt
+  grupo_parcelas_id String?         @db.Uuid
+  recorrencia_id    String?         @db.Uuid
+  competencia       DateTime?       @db.Date
+  observacoes       String?
+  pago_em           DateTime?
+  valor_pago        Decimal?        @db.Decimal(12, 2)
+  cancelado_em      DateTime?
+  criado_por        String?         @db.Uuid
+  criado_em         DateTime        @default(now())
+  atualizado_em     DateTime        @updatedAt
+
+  clinica       Clinica                  @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  categoria     CategoriaFinanceira?     @relation(fields: [categoria_id], references: [id], onDelete: SetNull)
+  paciente      Paciente?                @relation(fields: [paciente_id], references: [id], onDelete: SetNull)
+  profissional  Profissional?            @relation(fields: [profissional_id], references: [id], onDelete: SetNull)
+  recorrencia   Recorrencia?             @relation(fields: [recorrencia_id], references: [id], onDelete: SetNull)
+  movimentacoes MovimentacaoFinanceira[]
+
+  @@unique([recorrencia_id, competencia])
+  @@index([clinica_id])
+  @@index([clinica_id, tipo, status, vencimento])
+  @@index([clinica_id, grupo_parcelas_id])
+  @@map("titulos")
+}
+
+/// Modelo recorrente (ex.: mensalidade de paciente, aluguel) que gera um título por mês.
+/// Geração: ao criar + job diário (fila FINANCEIRO_RECORRENCIAS) que gera o do próximo mês com
+/// antecedência. `ultima_competencia` = último mês gerado.
+model Recorrencia {
+  id                 String                @id @default(uuid()) @db.Uuid
+  clinica_id         String                @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
+  tipo               TipoTitulo
+  descricao          String
+  valor              Decimal               @db.Decimal(12, 2)
+  /// 1–31 (meses mais curtos: último dia do mês).
+  dia_vencimento     Int                   @db.SmallInt
+  frequencia         FrequenciaRecorrencia @default(mensal)
+  inicio             DateTime              @db.Date
+  fim                DateTime?             @db.Date
+  ativo              Boolean               @default(true)
+  categoria_id       String?               @db.Uuid
+  paciente_id        String?               @db.Uuid
+  profissional_id    String?               @db.Uuid
+  fornecedor         String?
+  forma_pagamento    FormaPagamento?
+  ultima_competencia DateTime?             @db.Date
+  criado_por         String?               @db.Uuid
+  criado_em          DateTime              @default(now())
+  atualizado_em      DateTime              @updatedAt
+
+  clinica      Clinica              @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  categoria    CategoriaFinanceira? @relation(fields: [categoria_id], references: [id], onDelete: SetNull)
+  paciente     Paciente?            @relation(fields: [paciente_id], references: [id], onDelete: SetNull)
+  profissional Profissional?        @relation(fields: [profissional_id], references: [id], onDelete: SetNull)
+  titulos      Titulo[]
+
+  @@index([clinica_id])
+  @@index([clinica_id, ativo])
+  @@map("recorrencias")
+}
+
+/// Solicitação feita pelo paciente na página pública /agendar/:slug. Não consome max_agendamentos
+/// até ser APROVADA (a aprovação cria o agendamento com as validações normais + assegurarLimite).
+model SolicitacaoAgendamento {
+  id              String                       @id @default(uuid()) @db.Uuid
+  clinica_id      String                       @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
+  profissional_id String                       @db.Uuid
+  inicio          DateTime
+  fim             DateTime
+  status          StatusSolicitacaoAgendamento @default(pendente)
+  nome            String
+  /// Só dígitos, formato internacional (normalizarTelefone).
+  telefone        String
+  email           String?
+  /// Só dígitos.
+  cpf             String?
+  nascimento      DateTime?                    @db.Date
+  observacoes     String?
+  /// Consentimento LGPD de WhatsApp dado no formulário público.
+  aceita_whatsapp Boolean                      @default(false)
+  /// Paciente casado/criado na aprovação.
+  paciente_id     String?                      @db.Uuid
+  agendamento_id  String?                      @unique @db.Uuid
+  motivo_recusa   String?
+  analisado_por   String?                      @db.Uuid
+  analisado_em    DateTime?
+  ip              String?
+  user_agent      String?
+  criado_em       DateTime                     @default(now())
+  atualizado_em   DateTime                     @updatedAt
+
+  clinica      Clinica      @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  profissional Profissional @relation(fields: [profissional_id], references: [id], onDelete: Cascade)
+  paciente     Paciente?    @relation(fields: [paciente_id], references: [id], onDelete: SetNull)
+  agendamento  Agendamento? @relation(fields: [agendamento_id], references: [id], onDelete: SetNull)
+
+  @@index([clinica_id])
+  @@index([clinica_id, status, criado_em])
+  @@index([clinica_id, telefone, status])
+  @@map("solicitacoes_agendamento")
+}
+
+/// Lista de espera: paciente aguardando vaga (opcionalmente com um profissional específico).
+model ListaEspera {
+  id               String            @id @default(uuid()) @db.Uuid
+  clinica_id       String            @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
+  paciente_id      String            @db.Uuid
+  profissional_id  String?           @db.Uuid
+  /// Dias da semana preferidos (0 = domingo … 6 = sábado). Vazio = qualquer dia.
+  dias_semana      Int[]             @db.SmallInt
+  /// Turnos preferidos. Vazio = qualquer turno. manhã < 12h, tarde 12–18h, noite ≥ 18h (fuso da clínica).
+  turnos           Turno[]
+  observacao       String?
+  status           StatusListaEspera @default(aguardando)
+  /// Agendamento criado para este item (status `agendado`).
+  agendamento_id   String?           @db.Uuid
+  /// Última oferta de horário enviada pelo WhatsApp.
+  ultima_oferta_em DateTime?
+  criado_por       String?           @db.Uuid
+  criado_em        DateTime          @default(now())
+  atualizado_em    DateTime          @updatedAt
+
+  clinica      Clinica       @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  paciente     Paciente      @relation(fields: [paciente_id], references: [id], onDelete: Cascade)
+  profissional Profissional? @relation(fields: [profissional_id], references: [id], onDelete: SetNull)
+  agendamento  Agendamento?  @relation(fields: [agendamento_id], references: [id], onDelete: SetNull)
+
+  @@index([clinica_id])
+  @@index([clinica_id, status, criado_em])
+  @@index([clinica_id, paciente_id])
+  @@map("lista_espera")
+}
+
+/// Documento clínico emitido (receita, atestado, declaração, pedido de exame). IMUTÁVEL como o
+/// prontuário: sem update/delete (extensão tenant + trigger `documentos_clinicos_imutavel`).
+/// Correção = novo documento. O PDF é gerado sob demanda a partir destes dados (não é armazenado).
+model DocumentoClinico {
+  id              String               @id @default(uuid()) @db.Uuid
+  clinica_id      String               @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
+  tipo            TipoDocumentoClinico
+  paciente_id     String               @db.Uuid
+  profissional_id String               @db.Uuid
+  agendamento_id  String?              @db.Uuid
+  /// Usuário que emitiu.
+  autor_id        String?              @db.Uuid
+  titulo          String?
+  conteudo        String
+  /// Dados específicos do tipo (ex.: atestado { dias, cid }, pedido_exame { exames: [] }).
+  metadados       Json?
+  criado_em       DateTime             @default(now())
+
+  clinica      Clinica      @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  // NoAction (e não SetNull): SetNull faria UPDATE, bloqueado pelo trigger de imutabilidade. NoAction (e não
+  // Restrict) é checado no fim do comando: a exclusão em cascata da clínica inteira funciona.
+  paciente     Paciente     @relation(fields: [paciente_id], references: [id], onDelete: NoAction)
+  profissional Profissional @relation(fields: [profissional_id], references: [id], onDelete: NoAction)
+  agendamento  Agendamento? @relation(fields: [agendamento_id], references: [id], onDelete: NoAction)
+  autor        Usuario?     @relation("DocumentoAutor", fields: [autor_id], references: [id], onDelete: NoAction)
+
+  @@index([clinica_id])
+  @@index([clinica_id, paciente_id, criado_em])
+  @@map("documentos_clinicos")
+}
+
+/// Retorno previsto ("retorno em X dias"), criado ao finalizar um atendimento. Um por agendamento de origem.
+model Retorno {
+  id                     String        @id @default(uuid()) @db.Uuid
+  clinica_id             String        @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
+  paciente_id            String        @db.Uuid
+  profissional_id        String        @db.Uuid
+  agendamento_origem_id  String        @unique @db.Uuid
+  data_prevista          DateTime      @db.Date
+  status                 StatusRetorno @default(pendente)
+  agendamento_retorno_id String?       @db.Uuid
+  observacao             String?
+  convite_enviado_em     DateTime?
+  criado_por             String?       @db.Uuid
+  criado_em              DateTime      @default(now())
+  atualizado_em          DateTime      @updatedAt
+
+  clinica             Clinica      @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  paciente            Paciente     @relation(fields: [paciente_id], references: [id], onDelete: Cascade)
+  profissional        Profissional @relation(fields: [profissional_id], references: [id], onDelete: Cascade)
+  agendamento_origem  Agendamento  @relation("RetornoOrigem", fields: [agendamento_origem_id], references: [id], onDelete: Cascade)
+  agendamento_retorno Agendamento? @relation("RetornoAgendamento", fields: [agendamento_retorno_id], references: [id], onDelete: SetNull)
+
+  @@index([clinica_id])
+  @@index([clinica_id, status, data_prevista])
+  @@index([clinica_id, paciente_id])
+  @@map("retornos")
 }

@@ -7,7 +7,15 @@ import { chavesMe } from './me';
 import type { Paginado, StatusAgendamento } from './tipos';
 
 export type StatusSessaoWhatsapp = 'desconectada' | 'iniciando' | 'aguardando_qr' | 'conectada' | 'erro';
-export type TipoMensagemWhatsapp = 'lembrete' | 'confirmacao' | 'aviso';
+export type TipoMensagemWhatsapp =
+  | 'lembrete'
+  | 'confirmacao'
+  | 'aviso'
+  // Fase 2 do produto
+  | 'agendamento_confirmado'
+  | 'agendamento_recusado'
+  | 'oferta_horario'
+  | 'convite_retorno';
 export type DirecaoMensagemWhatsapp = 'entrada' | 'saida';
 export type StatusMensagemWhatsapp = 'pendente' | 'enviada' | 'falhou' | 'recebida';
 
@@ -60,6 +68,10 @@ export const ROTULOS_TIPO_MENSAGEM: Record<TipoMensagemWhatsapp, string> = {
   lembrete: 'Lembrete',
   confirmacao: 'Resposta automática',
   aviso: 'Aviso',
+  agendamento_confirmado: 'Agendamento online aprovado',
+  agendamento_recusado: 'Agendamento online recusado',
+  oferta_horario: 'Oferta de horário',
+  convite_retorno: 'Convite de retorno',
 };
 
 export const ROTULOS_STATUS_MENSAGEM: Record<StatusMensagemWhatsapp, string> = {

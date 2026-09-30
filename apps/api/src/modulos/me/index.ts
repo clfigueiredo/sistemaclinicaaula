@@ -5,7 +5,8 @@
  *                  recursos { [codigo]: { nome, tipo, habilitado, limite, periodo, uso } }
  *   GET /me/onboarding (admin) → passos do onboarding concluídos
  *                  { profissional, horarios, convenios, whatsapp } (booleans)
- *   PUT /me/clinica (admin) → edita os dados cadastrais da própria clínica
+ *   PUT /me/clinica (admin) → edita os dados cadastrais da própria clínica, inclusive o `slug` público do
+ *                  agendamento online (único ⇒ 409 registro_duplicado)
  *                  (documento e status não são editáveis aqui — só pelo super admin)
  *   GET /admin/me  (token de plataforma) → dados do super admin
  */
@@ -14,6 +15,7 @@ import { z } from 'zod';
 import { autenticarAdmin, autenticarClinica, exigirPapel } from '../../plugins/auth';
 import { obterUsoERecursos } from '../../plugins/recursos';
 import { ou404 } from '../../utils/erros';
+import { validarSlug } from '../../utils/slug';
 
 export const prefixo = '';
 
@@ -29,6 +31,7 @@ const CAMPOS_CLINICA = {
   uf: true,
   cep: true,
   fuso_horario: true,
+  slug: true,
   status: true,
 } as const;
 
@@ -86,6 +89,13 @@ const corpoClinica = z.object({
     .transform((v) => (v === '' ? null : v))
     .nullish(),
   fuso_horario: z.enum(FUSOS_BRASIL, 'Fuso horário inválido').optional(),
+  /** Fase 2: slug público do agendamento online (/agendar/:slug). Único (409 registro_duplicado). */
+  slug: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .refine(validarSlug, 'Endereço inválido: use de 3 a 60 letras minúsculas, números e hífens (sem acentos).')
+    .optional(),
 });
 
 const modulo: FastifyPluginAsyncZod = async (app) => {

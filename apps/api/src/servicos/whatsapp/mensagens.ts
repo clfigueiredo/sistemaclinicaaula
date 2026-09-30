@@ -63,3 +63,82 @@ export function interpretarResposta(texto: string): RespostaPaciente {
   if (['2', '2️⃣', 'dois', 'cancelar', 'cancelo', 'cancela', 'cancelado'].includes(t)) return 'cancelar';
   return 'outra';
 }
+
+// ============================================================================
+// Fase 2 do produto — templates usados por outros módulos com enfileirarMensagem (./envio.ts).
+// Tipo de mensagem (TipoMensagem) correspondente indicado em cada função.
+// ============================================================================
+
+/**
+ * "30/09/2026" de uma coluna `@db.Date` (data_prevista, vencimento…). O Prisma devolve essas datas como
+ * meia-noite UTC, então formatamos em UTC (formatar no fuso da clínica mostraria o dia anterior).
+ */
+export function formatarDataSemHora(data: Date): string {
+  return formatInTimeZone(data, 'UTC', 'dd/MM/yyyy');
+}
+
+/** tipo `agendamento_confirmado` — solicitação de agendamento online APROVADA. */
+export function textoAgendamentoOnlineConfirmado(d: DadosLembrete & { endereco?: string | null }): string {
+  return [
+    `Olá, ${primeiroNome(d.paciente)}!`,
+    '',
+    `Sua consulta na *${d.clinica}* com *${d.profissional}* está *agendada* para ${formatarDataConsulta(d.inicio, d.fuso)}.`,
+    ...(d.endereco ? ['', `Endereço: ${d.endereco}`] : []),
+    '',
+    'Se precisar remarcar ou cancelar, fale com a clínica. Até lá!',
+  ].join('\n');
+}
+
+/** tipo `agendamento_recusado` — solicitação de agendamento online RECUSADA (motivo opcional). */
+export function textoAgendamentoOnlineRecusado(d: {
+  paciente: string;
+  clinica: string;
+  inicio: Date;
+  fuso: string;
+  motivo?: string | null;
+  linkAgendamento?: string | null;
+}): string {
+  return [
+    `Olá, ${primeiroNome(d.paciente)}.`,
+    '',
+    `Infelizmente não foi possível confirmar o horário solicitado na *${d.clinica}* (${formatarDataConsulta(d.inicio, d.fuso)}).`,
+    ...(d.motivo ? ['', `Motivo: ${d.motivo}`] : []),
+    '',
+    d.linkAgendamento
+      ? `Você pode escolher outro horário em ${d.linkAgendamento} ou falar com a clínica.`
+      : 'Entre em contato com a clínica para escolher outro horário.',
+  ].join('\n');
+}
+
+/** tipo `oferta_horario` — horário vago oferecido a paciente da lista de espera. */
+export function textoOfertaHorario(d: DadosLembrete & { telefoneClinica?: string | null }): string {
+  return [
+    `Olá, ${primeiroNome(d.paciente)}!`,
+    '',
+    `Abriu um horário na *${d.clinica}* com *${d.profissional}*: ${formatarDataConsulta(d.inicio, d.fuso)}.`,
+    '',
+    d.telefoneClinica
+      ? `Se tiver interesse, fale com a clínica pelo ${d.telefoneClinica} o quanto antes — o horário é de quem confirmar primeiro.`
+      : 'Se tiver interesse, fale com a clínica o quanto antes — o horário é de quem confirmar primeiro.',
+  ].join('\n');
+}
+
+/** tipo `convite_retorno` — convite para agendar o retorno. */
+export function textoConviteRetorno(d: {
+  paciente: string;
+  clinica: string;
+  profissional: string;
+  /** Coluna @db.Date (meia-noite UTC). */
+  dataPrevista: Date;
+  linkAgendamento?: string | null;
+}): string {
+  return [
+    `Olá, ${primeiroNome(d.paciente)}!`,
+    '',
+    `Está chegando a data do seu retorno com *${d.profissional}* na *${d.clinica}* (previsto para ${formatarDataSemHora(d.dataPrevista)}).`,
+    '',
+    d.linkAgendamento
+      ? `Agende pelo link ${d.linkAgendamento} ou fale com a clínica.`
+      : 'Fale com a clínica para agendar o melhor horário.',
+  ].join('\n');
+}

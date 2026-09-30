@@ -44,10 +44,7 @@ import {
   calcularDisponibilidade,
   obterFuso,
   travarAgendaProfissional,
-  validarBloqueio,
-  validarConflito,
-  validarGrade,
-  type ClienteAgenda,
+  validarHorario,
 } from './servico';
 
 export const prefixo = '/agendamentos';
@@ -194,25 +191,6 @@ function validarEncaixe(request: FastifyRequest, encaixe?: boolean) {
     throw erros.proibido('Somente o administrador pode fazer encaixe fora da grade ou no passado.');
   }
   return !!encaixe;
-}
-
-/** Validações de horário comuns a criar e remarcar (executar dentro da transação, após a trava). */
-async function validarHorario(
-  tx: ClienteAgenda,
-  a: { profissionalId: string; inicio: Date; fim: Date; fuso: string; encaixe: boolean; ignorarId?: string },
-) {
-  if (a.fim <= a.inicio) throw erros.invalido('O fim deve ser depois do início.', 'intervalo_invalido');
-  if (a.fim.getTime() - a.inicio.getTime() > 12 * 3_600_000) {
-    throw erros.invalido('A duração máxima de um agendamento é de 12 horas.', 'intervalo_invalido');
-  }
-  if (!a.encaixe) {
-    if (a.inicio.getTime() < Date.now() - 60_000) {
-      throw new ErroNegocio(400, 'horario_passado', 'Não é possível agendar em um horário que já passou.');
-    }
-    await validarGrade(tx, a.profissionalId, a.inicio, a.fim, a.fuso);
-  }
-  await validarBloqueio(tx, a.profissionalId, a.inicio, a.fim);
-  await validarConflito(tx, a.profissionalId, a.inicio, a.fim, a.ignorarId);
 }
 
 // ----------------------------------------------------------------------------- rotas

@@ -17,7 +17,12 @@ export type CodigoRecurso =
   | 'whatsapp'
   | 'max_mensagens'
   | 'financeiro'
-  | 'agendamento_online';
+  | 'agendamento_online'
+  // Fase 2 do produto
+  | 'lista_espera'
+  | 'documentos_pdf'
+  | 'retorno_automatico'
+  | 'dashboard';
 
 export type StatusAgendamento = 'agendado' | 'confirmado' | 'compareceu' | 'atendido' | 'cancelado' | 'faltou';
 
@@ -58,6 +63,8 @@ export type Me = {
     uf: string | null;
     cep: string | null;
     fuso_horario: string;
+    /** Endereço público do agendamento online: /agendar/:slug (null = sem agendamento online). */
+    slug: string | null;
     status: 'ativa' | 'inativa';
   };
   assinatura: {
@@ -99,4 +106,112 @@ export const ROTULOS_STATUS_ASSINATURA: Record<StatusAssinatura, string> = {
   vencida: 'Vencida',
   cancelada: 'Cancelada',
   bloqueada: 'Bloqueada',
+};
+
+// ============================================================================
+// Fase 2 do produto — enums compartilhados (espelham o schema Prisma). Contratos: docs/FASE2.md
+// Valores monetários vêm da API como string decimal ("150.00"); envie number.
+// Datas sem hora (vencimento, data da movimentação, data_prevista) trafegam como 'YYYY-MM-DD'.
+// ============================================================================
+
+export type FormaPagamento =
+  | 'dinheiro'
+  | 'pix'
+  | 'cartao_credito'
+  | 'cartao_debito'
+  | 'boleto'
+  | 'transferencia'
+  | 'convenio'
+  | 'outro';
+
+export const ROTULOS_FORMA_PAGAMENTO: Record<FormaPagamento, string> = {
+  dinheiro: 'Dinheiro',
+  pix: 'Pix',
+  cartao_credito: 'Cartão de crédito',
+  cartao_debito: 'Cartão de débito',
+  boleto: 'Boleto',
+  transferencia: 'Transferência',
+  convenio: 'Convênio',
+  outro: 'Outro',
+};
+
+export type TipoContaFinanceira = 'caixa' | 'banco' | 'carteira_digital' | 'outro';
+export const ROTULOS_TIPO_CONTA: Record<TipoContaFinanceira, string> = {
+  caixa: 'Caixa',
+  banco: 'Banco',
+  carteira_digital: 'Carteira digital',
+  outro: 'Outro',
+};
+
+export type TipoCategoriaFinanceira = 'receita' | 'despesa';
+export type TipoMovimentacao = 'entrada' | 'saida';
+export type OrigemMovimentacao = 'manual' | 'consulta' | 'titulo' | 'repasse' | 'estorno';
+export const ROTULOS_ORIGEM_MOVIMENTACAO: Record<OrigemMovimentacao, string> = {
+  manual: 'Lançamento',
+  consulta: 'Consulta',
+  titulo: 'Conta paga/recebida',
+  repasse: 'Repasse',
+  estorno: 'Estorno',
+};
+
+export type TipoTitulo = 'pagar' | 'receber';
+/** `vencido` é derivado pela API (aberto e vencimento < hoje); não existe no banco. */
+export type StatusTitulo = 'aberto' | 'pago' | 'cancelado' | 'vencido';
+export const ROTULOS_STATUS_TITULO: Record<StatusTitulo, string> = {
+  aberto: 'Em aberto',
+  pago: 'Pago',
+  cancelado: 'Cancelado',
+  vencido: 'Vencido',
+};
+
+export type StatusSolicitacaoAgendamento = 'pendente' | 'aprovada' | 'recusada' | 'expirada';
+export const ROTULOS_STATUS_SOLICITACAO: Record<StatusSolicitacaoAgendamento, string> = {
+  pendente: 'Pendente',
+  aprovada: 'Aprovada',
+  recusada: 'Recusada',
+  expirada: 'Expirada',
+};
+
+export type StatusListaEspera = 'aguardando' | 'agendado' | 'removido';
+export const ROTULOS_STATUS_LISTA_ESPERA: Record<StatusListaEspera, string> = {
+  aguardando: 'Aguardando',
+  agendado: 'Agendado',
+  removido: 'Removido',
+};
+
+export type Turno = 'manha' | 'tarde' | 'noite';
+export const ROTULOS_TURNO: Record<Turno, string> = { manha: 'Manhã', tarde: 'Tarde', noite: 'Noite' };
+
+export type TipoDocumentoClinico = 'receita' | 'atestado' | 'declaracao' | 'pedido_exame';
+export const ROTULOS_TIPO_DOCUMENTO: Record<TipoDocumentoClinico, string> = {
+  receita: 'Receita',
+  atestado: 'Atestado',
+  declaracao: 'Declaração',
+  pedido_exame: 'Pedido de exame',
+};
+
+export type StatusRetorno = 'pendente' | 'agendado' | 'lembrado' | 'cancelado';
+export const ROTULOS_STATUS_RETORNO: Record<StatusRetorno, string> = {
+  pendente: 'Pendente',
+  agendado: 'Agendado',
+  lembrado: 'Convidado',
+  cancelado: 'Cancelado',
+};
+
+export type ProvedorPagamento = 'asaas' | 'stripe' | 'mercado_pago';
+export const ROTULOS_PROVEDOR_PAGAMENTO: Record<ProvedorPagamento, string> = {
+  asaas: 'Asaas',
+  stripe: 'Stripe',
+  mercado_pago: 'Mercado Pago',
+};
+export type AmbienteGateway = 'sandbox' | 'producao';
+export type MetodoCobranca = 'pix' | 'boleto' | 'cartao';
+export const ROTULOS_METODO_COBRANCA: Record<MetodoCobranca, string> = { pix: 'Pix', boleto: 'Boleto', cartao: 'Cartão' };
+export type StatusCobranca = 'pendente' | 'paga' | 'vencida' | 'cancelada' | 'estornada';
+export const ROTULOS_STATUS_COBRANCA: Record<StatusCobranca, string> = {
+  pendente: 'Pendente',
+  paga: 'Paga',
+  vencida: 'Vencida',
+  cancelada: 'Cancelada',
+  estornada: 'Estornada',
 };

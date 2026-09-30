@@ -8,6 +8,8 @@ clínicas num painel super admin; cada plano libera/limita recursos do sistema.
 
 Documentação completa da arquitetura e do modelo de dados: **`docs/ARQUITETURA.md`** —
 ler antes de implementar qualquer módulo. Setup do ambiente local: **`docs/SETUP_LOCAL.md`**.
+**Fase 2 do produto** (financeiro, agendamento online, lista de espera, documentos PDF, retornos, dashboard,
+cobrança do SaaS): contratos por módulo, donos de arquivo e integrações em **`docs/FASE2.md`**.
 
 ## Idioma
 
@@ -42,7 +44,7 @@ Sistema_Clinica/
 ├── deploy/                   # Dockerfile.api, Dockerfile.web (build do web + Caddy), Caddyfile, backup.sh
 ├── .env.example / .env       # ÚNICO .env, na raiz (lido por compose, API, Prisma e testes)
 ├── package.json              # scripts orquestradores (dev, build, typecheck, test, db:*)
-├── docs/ (ARQUITETURA.md, SETUP_LOCAL.md, DEPLOY.md)
+├── docs/ (ARQUITETURA.md, SETUP_LOCAL.md, DEPLOY.md, FASE2.md)
 ├── apps/api/                 # Fastify 5 + Zod 4 + Prisma 6 (ESM, TypeScript estrito, tsx watch / tsup)
 │   ├── prisma/schema.prisma  # modelo de dados completo + migrations + seed.ts
 │   ├── test/                 # vitest (banco clinica_teste)
@@ -53,9 +55,11 @@ Sistema_Clinica/
 │       ├── config/env.ts     # envs validadas com Zod → `env`
 │       ├── lib/prisma.ts     # prisma CRU (só admin/auth/workers/seed)
 │       ├── plugins/          # auth.ts, tenant.ts, recursos.ts, erros.ts
-│       ├── utils/            # erros.ts (ErroNegocio, ou404), logAcesso.ts, senha.ts, documento.ts
-│       ├── servicos/         # filas.ts (BullMQ/Redis), whatsapp/whatsappService.ts
-│       ├── workers/index.ts  # registro dos workers BullMQ
+│       ├── utils/            # erros.ts (ErroNegocio, ou404), logAcesso.ts, senha.ts, documento.ts,
+│       │                     # cripto.ts (AES-256-GCM), slug.ts
+│       ├── servicos/         # filas.ts (BullMQ/Redis), whatsapp/*, pagamentos/* (gateways do SaaS),
+│       │                     # configuracaoClinica.ts, financeiroComum.ts
+│       ├── workers/index.ts  # registro dos workers BullMQ (+ stubs da fase 2)
 │       └── modulos/<nome>/index.ts   # um plugin por domínio (registrados em modulos/index.ts)
 └── apps/web/                 # React 19 + Vite + Tailwind 4 + shadcn/ui + TanStack Query + React Router 7
     └── src/
@@ -154,11 +158,17 @@ de **Teste grátis** (tudo limitado a 1), crie uma clínica nova em `/cadastro`.
   `default` (plugin `FastifyPluginAsyncZod`) e `prefixo`. **Todos já estão registrados** em
   `src/modulos/index.ts` (só mexa ao criar um módulo novo). Crie arquivos auxiliares na própria pasta
   (`rotas.ts`, `servico.ts`, `esquemas.ts`…).
-- Módulos (todos implementados): `auth`, `me` (+ `GET /me/onboarding` e `PUT /me/clinica` — admin edita os
-  dados cadastrais da própria clínica; documento e status só pelo super admin), `admin-planos`, `admin-clinicas`,
-  `profissionais` (+ horários e bloqueios), `convenios`, `usuarios`, `pacientes` (+ alergias/medicações),
-  `prontuario` (+ anexos), `agendamentos`, `whatsapp` (+ webhook `POST /webhooks/whatsapp`). Cada
-  `index.ts` traz no topo as rotas, guards e regras.
+- Módulos do MVP (implementados): `auth`, `me` (+ `GET /me/onboarding` e `PUT /me/clinica` — admin edita os
+  dados cadastrais da própria clínica, inclusive o `slug` público; documento e status só pelo super admin),
+  `admin-planos`, `admin-clinicas`, `profissionais` (+ horários e bloqueios), `convenios`, `usuarios`,
+  `pacientes` (+ alergias/medicações), `prontuario` (+ anexos), `agendamentos`, `whatsapp` (+ webhook
+  `POST /webhooks/whatsapp`). Cada `index.ts` traz no topo as rotas, guards e regras.
+- Módulos da fase 2 do produto (stubs registrados, contrato em `docs/FASE2.md`): `financeiro`,
+  `agendamento-online` (+ rotas públicas `/publico/clinicas/:slug*`), `lista-espera`, `documentos`, `retornos`,
+  `dashboard`, `admin-cobranca` (+ webhooks `POST /webhooks/pagamentos/:gateway`).
+- Criar agendamento fora do módulo agendamentos (ex.: aprovação do agendamento online): na mesma transação,
+  `assegurarLimite('max_agendamentos', { tx })` + `travarAgendaProfissional` + `validarHorario`
+  (`modulos/agendamentos/servico.ts`). Fora do HTTP, `criarDbTenant(clinicaId)` dá o client com escopo.
 - Bloqueios de agenda: cadastro em `/profissionais/bloqueios` (GET/POST/DELETE); leitura para a agenda em
   `GET /agendamentos/bloqueios` (profissional logado só vê os seus + os da clínica). Não existe `/bloqueios`.
 - Cancelamento de agendamento grava `motivo_cancelamento` + `cancelado_em` (não mexe em `observacoes`);
@@ -205,7 +215,13 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
 - `prisma` cru (`src/lib/prisma.ts`) só em admin, auth, workers, webhook e seed. Um `create` de modelo
   de clínica pelo prisma cru **sem** `clinica_id` falha no banco (falha fechada).
 - `prontuario_registros` é imutável: update/delete lançam `prontuario_imutavel` (extensão) e o banco
-  tem trigger. Correção = novo registro com `corrige_registro_id`.
+  tem trigger. Correção = novo registro com `corrige_registro_id`. `documentos_clinicos` (fase 2) idem, com
+  `documento_imutavel`. Apagar uma clínica que tenha esses registros exige, na transação,
+  `SET LOCAL app.permitir_exclusao_prontuario = 'on'`.
+- `cobrancas` (plataforma, com `clinica_id`) é somente leitura e filtrada pela clínica via `request.db`;
+  `gateways_pagamento` e `eventos_gateway` são proibidos via `request.db` (use o prisma cru no admin).
+- `configuracoes_clinica` (1:1) é criada sob demanda: use sempre `obterConfiguracaoClinica(request.db)` /
+  `obterConfiguracaoClinicaPorId(clinicaId)` (`src/servicos/configuracaoClinica.ts`).
 
 ### API — limites do plano (`src/plugins/recursos.ts`)
 
@@ -225,7 +241,9 @@ await request.db.$transaction(async (tx) => {
 ```
 
 - Códigos: `max_profissionais`, `max_recepcionistas`, `max_agendamentos`, `max_anexos`, `whatsapp`,
-  `max_mensagens`, `financeiro`, `agendamento_online`.
+  `max_mensagens`, `financeiro`, `agendamento_online`, `lista_espera`, `documentos_pdf`, `retorno_automatico`,
+  `dashboard` (os seis últimos são liga/desliga da fase 2; habilitados nos planos do seed, desabilitados nos
+  planos criados pelo super admin até ele liberar).
 - Contagem: profissionais **ativos**; usuários `recepcao` **ativos** + admins ativos − 1 (o admin principal não conta); agendamentos e
   anexos **criados** no período; mensagens de **saída** com status `pendente|enviada` no período.
   Período `mensal` = desde o dia 1 do mês no fuso da clínica.
@@ -261,7 +279,13 @@ await request.db.$transaction(async (tx) => {
 - Avisos à recepção (resposta "2"): `mensagens_whatsapp` com `tipo = 'aviso'`, direção entrada, `lida_em`
   nulo = não lido (`GET /whatsapp/avisos`, `POST /whatsapp/avisos/:id/lido`). Webhook idempotente por
   advisory lock + índice único parcial `(clinica_id, id_externo)` das mensagens de entrada.
-- `src/servicos/filas.ts`: `NOMES_FILAS.ENVIO_WHATSAPP` / `NOMES_FILAS.LEMBRETES`, `obterFila(nome)`,
+- Outros módulos enviam WhatsApp com `enfileirarMensagem({ clinicaId, pacienteId | null, agendamentoId?, tipo,
+  conteudo, telefone?, consentimentoExterno? })` (`servicos/whatsapp/envio.ts`) e os templates de
+  `servicos/whatsapp/mensagens.ts`. Tipos novos: `agendamento_confirmado`, `agendamento_recusado`,
+  `oferta_horario`, `convite_retorno`. Sem paciente cadastrado: `pacienteId: null` + `telefone` +
+  `consentimentoExterno: true` (grava `mensagens_whatsapp.consentimento_externo`). Detalhes em `docs/FASE2.md` §8.
+- `src/servicos/filas.ts`: `NOMES_FILAS.ENVIO_WHATSAPP` / `NOMES_FILAS.LEMBRETES` (+ fase 2:
+  `FINANCEIRO_RECORRENCIAS`, `RETORNOS`, `SOLICITACOES_AGENDAMENTO`, `COBRANCAS`), `obterFila(nome)`,
   `criarWorker(nome, processador)`, `obterConexaoRedis()`, `INTERVALO_ENVIO_MS` (20–40 s),
   tipos `JobEnvioWhatsapp`/`JobLembretes`, `fecharFilas()`.
 - Workers: registrar em `src/workers/index.ts` (`iniciarWorkers`). Em dev rodam no processo da API
@@ -276,8 +300,13 @@ await request.db.$transaction(async (tx) => {
 - `TRUST_PROXY`: `false` (padrão/dev — ignora `X-Forwarded-For`); produção atrás do Caddy: `1`.
 - `HOST`: interface da API (dev `0.0.0.0` para o webhook do WPPConnect via `host.docker.internal`).
 - Com `NODE_ENV=production` a API não sobe se `JWT_SECRET`/`WEBHOOK_TOKEN`/`WPPCONNECT_SECRET_KEY`
-  tiverem < 32 caracteres ou contiverem `troque`/`exemplo`/`changeme`, ou se a `REDIS_URL` não tiver senha
-  (`config/env.ts`, `problemasDeSeguranca`); em dev só avisa. Deploy: `docs/DEPLOY.md`.
+  tiverem < 32 caracteres ou contiverem `troque`/`exemplo`/`changeme`, se a `REDIS_URL` não tiver senha ou se
+  `CHAVE_CRIPTOGRAFIA` não tiver 64 hex (ou for a chave de dev) (`config/env.ts`, `problemasDeSeguranca`);
+  em dev só avisa. Deploy: `docs/DEPLOY.md`.
+- Fase 2: `CHAVE_CRIPTOGRAFIA` (AES-256-GCM dos segredos no banco — `utils/cripto.ts`: `criptografar`,
+  `descriptografar`, `criptografarJson`, `mascararSegredo`, `finalSegredo`; em dev/teste, sem a variável, usa
+  uma chave fixa de desenvolvimento; **não troque** a chave depois de gravar segredos), `API_URL_PUBLICA`
+  (URLs de webhook dos gateways) e `WEB_URL_PUBLICA` (links para o paciente; padrão = `WEB_URL`).
 
 ### Web — padrões
 
@@ -302,6 +331,9 @@ await request.db.$transaction(async (tx) => {
 - **Papéis no front**: `PAPEIS_ROTA` em `src/rotas/navegacao.ts` (ex.: `PAPEIS_ROTA.prontuario` para
   esconder abas de prontuário da recepção). Só UX — o backend é quem garante. Profissional vê
   Profissionais em modo somente leitura (edição só admin; bloqueios admin e recepção).
+- **Recursos no front**: item de menu com `recurso` só aparece se `me.recursos[codigo].habilitado`
+  (`itensPermitidos(itens, papel, me.recursos)`); `<RotaClinica recurso="financeiro">` mostra
+  `<RecursoIndisponivel />` quando o plano não inclui; `recursoHabilitado(me, codigo)` para blocos.
 - **Topo do app da clínica**: `Estrutura` aceita `acoesTopo`; o `LayoutClinica` coloca ali o
   `SinoAvisos` (admin e recepção, se o plano tiver `whatsapp`): contador de não lidos com polling de 60 s,
   popover com a lista, "marcar como lido" e links para `/agenda?agendamento=<id>` (abre o painel e vai
@@ -341,4 +373,9 @@ await request.db.$transaction(async (tx) => {
       compose de produção + Caddy + backup (`docs/DEPLOY.md`). Testes em `apps/api/test/seguranca.test.ts`.
 - [ ] Pendente: teste manual do WhatsApp com celular real (passo a passo em `docs/SETUP_LOCAL.md`)
 - [ ] Pendente: primeiro deploy na VPS seguindo `docs/DEPLOY.md` (build das imagens ainda não testado numa VPS)
-- [ ] Fase 2 do produto (financeiro, agendamento online etc. — ver `docs/ARQUITETURA.md` §10)
+- [x] Fase 2 do produto — **fundação** (30/09/2026): migration `fase2_produto` (modelos, enums, trigger dos
+      documentos, slugs, recursos novos), seed, envs (`CHAVE_CRIPTOGRAFIA`, `API_URL_PUBLICA`, `WEB_URL_PUBLICA`),
+      `utils/cripto.ts` + `utils/slug.ts`, stubs de módulos/workers/gateways, rotas/menus/stubs do web,
+      contratos em `docs/FASE2.md`, testes em `apps/api/test/fase2.test.ts`
+- [ ] Fase 2 do produto — **em andamento**: implementar os módulos `financeiro`, `agendamento-online`,
+      `lista-espera`, `documentos`, `retornos`, `dashboard` e `admin-cobranca` seguindo `docs/FASE2.md`

@@ -12,7 +12,12 @@ import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { PapelUsuario } from '@prisma/client';
 import { buildApp, mascararSegredosUrl, type App } from '../src/app';
-import { interpretarTrustProxy, problemasDeSeguranca, validarSegurancaEnv } from '../src/config/env';
+import {
+  CHAVE_CRIPTOGRAFIA_DEV,
+  interpretarTrustProxy,
+  problemasDeSeguranca,
+  validarSegurancaEnv,
+} from '../src/config/env';
 import { prisma } from '../src/lib/prisma';
 import { assinarTokenClinica } from '../src/plugins/auth';
 import { CATALOGO_RECURSOS } from '../src/plugins/recursos';
@@ -364,7 +369,13 @@ describe('troca de senha', () => {
 
 describe('validação de segredos do ambiente', () => {
   const forte = 'a'.repeat(16) + 'b'.repeat(16) + 'c';
-  const bom = { JWT_SECRET: forte, WEBHOOK_TOKEN: forte, WPPCONNECT_SECRET_KEY: forte, REDIS_URL: 'redis://:s3nh4@redis:6379' };
+  const bom = {
+    JWT_SECRET: forte,
+    WEBHOOK_TOKEN: forte,
+    WPPCONNECT_SECRET_KEY: forte,
+    REDIS_URL: 'redis://:s3nh4@redis:6379',
+    CHAVE_CRIPTOGRAFIA: 'a1'.repeat(32),
+  };
 
   it('aceita segredos longos e Redis com senha', () => {
     expect(problemasDeSeguranca(bom)).toEqual([]);
@@ -383,6 +394,11 @@ describe('validação de segredos do ambiente', () => {
     expect(problemas.join('\n')).toMatch(/WPPCONNECT_SECRET_KEY parece um valor de exemplo \(contém "changeme"\)/);
     expect(problemas.join('\n')).toMatch(/REDIS_URL deve incluir senha/);
     expect(problemasDeSeguranca({ ...bom, JWT_SECRET: `exemplo-${forte}` })).toHaveLength(1);
+    // Fase 2: chave de criptografia (64 hex, diferente da chave de desenvolvimento)
+    expect(problemasDeSeguranca({ ...bom, CHAVE_CRIPTOGRAFIA: '' }).join(' ')).toMatch(/CHAVE_CRIPTOGRAFIA deve ter 64/);
+    expect(problemasDeSeguranca({ ...bom, CHAVE_CRIPTOGRAFIA: CHAVE_CRIPTOGRAFIA_DEV }).join(' ')).toMatch(
+      /chave de desenvolvimento/,
+    );
   });
 
   it('produção lança erro; desenvolvimento só avisa', () => {

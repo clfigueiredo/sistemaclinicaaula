@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { formatarData, formatarMoeda, mascararCpfCnpj, mascararTelefone } from '@/lib/formatos';
 import { cn } from '@/lib/utils';
 import DialogoEditarClinica from './DialogoEditarClinica';
+import ConfigAgendamentoOnline from './ConfigAgendamentoOnline';
 
 function formatarCep(cep: string) {
   return cep.length === 8 ? `${cep.slice(0, 5)}-${cep.slice(5)}` : cep;
@@ -119,6 +120,12 @@ export default function PaginaConfiguracoes() {
           </CardContent>
         </Card>
       </div>
+      {/* Fase 2 (dono: agendamento-online): endereço público /agendar/:slug e opções do agendamento online. */}
+      {me.papel === 'admin' && recursos.agendamento_online?.habilitado && (
+        <div className="mt-6">
+          <ConfigAgendamentoOnline />
+        </div>
+      )}
       {editando && <DialogoEditarClinica clinica={clinica} aoFechar={() => setEditando(false)} />}
     </div>
   );

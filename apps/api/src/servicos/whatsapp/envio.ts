@@ -53,14 +53,29 @@ export function definirEnfileirador(novo: Enfileirador | null): void {
 // Enfileirar
 // ----------------------------------------------------------------------------
 
+/**
+ * Mensagem a enfileirar. Pode ser chamada por QUALQUER módulo (rota, serviço ou worker) — é a única
+ * porta de saída de WhatsApp. Tipos (enum TipoMensagem): lembrete, confirmacao, aviso (entrada),
+ * agendamento_confirmado, agendamento_recusado, oferta_horario, convite_retorno. Textos prontos em
+ * `./mensagens.ts`. Chame DEPOIS do commit da transação do seu módulo (usa o prisma cru e a própria transação).
+ *
+ * Duas formas:
+ *   1) com paciente cadastrado (padrão): `pacienteId` + consentimento = `pacientes.aceita_whatsapp`;
+ *      telefone padrão = `pacientes.whatsapp`.
+ *   2) SEM paciente (ex.: recusa de solicitação de agendamento online, em que o visitante ainda não é
+ *      paciente): `pacienteId: null` + `telefone` + `consentimentoExterno: true` (o consentimento dado
+ *      no formulário público). Grava `mensagens_whatsapp.consentimento_externo = true`.
+ */
 export type NovaMensagem = {
   clinicaId: string;
-  pacienteId: string;
+  pacienteId: string | null;
   agendamentoId?: string | null;
   tipo: TipoMensagem;
   conteudo: string;
-  /** Padrão: whatsapp do paciente. */
+  /** Padrão: whatsapp do paciente. Obrigatório quando pacienteId é null. */
   telefone?: string | null;
+  /** Só para pacienteId null: consentimento LGPD dado fora do cadastro. Sem ele ⇒ `sem_consentimento`. */
+  consentimentoExterno?: boolean;
 };
 
 export type ResultadoEnfileirar =
@@ -78,8 +93,12 @@ export async function enfileirarMensagem(nova: NovaMensagem): Promise<ResultadoE
   const resultado = await prisma.$transaction(async (tx) => {
     await travarClinica(tx, clinicaId);
 
-    const paciente = await tx.paciente.findFirst({ where: { id: nova.pacienteId, clinica_id: clinicaId } });
-    if (!paciente) return { mensagem: null, erro: 'paciente_nao_encontrado' };
+    const paciente = nova.pacienteId
+      ? await tx.paciente.findFirst({ where: { id: nova.pacienteId, clinica_id: clinicaId } })
+      : null;
+    if (nova.pacienteId && !paciente) return { mensagem: null, erro: 'paciente_nao_encontrado' };
+    if (!nova.pacienteId && !nova.telefone) return { mensagem: null, erro: 'telefone_invalido' };
+    const consentimentoExterno = !paciente && nova.consentimentoExterno === true;
 
     // Lembrete: no máximo um ativo por agendamento (evita duplicar em execuções concorrentes).
     if (nova.tipo === 'lembrete' && nova.agendamentoId) {
@@ -100,9 +119,9 @@ export async function enfileirarMensagem(nova: NovaMensagem): Promise<ResultadoE
       if (!ag || ag.lembrete_enviado_em || pendente) return { mensagem: null, erro: 'lembrete_duplicado' };
     }
 
-    const telefone = normalizarTelefone(nova.telefone ?? paciente.whatsapp);
+    const telefone = normalizarTelefone(nova.telefone ?? paciente?.whatsapp);
     let erro: string | null = null;
-    if (!paciente.aceita_whatsapp) erro = 'sem_consentimento';
+    if (paciente ? !paciente.aceita_whatsapp : !consentimentoExterno) erro = 'sem_consentimento';
     else if (!telefone) erro = 'telefone_invalido';
     else {
       try {
@@ -118,14 +137,15 @@ export async function enfileirarMensagem(nova: NovaMensagem): Promise<ResultadoE
     const mensagem = await tx.mensagemWhatsapp.create({
       data: {
         clinica_id: clinicaId,
-        paciente_id: paciente.id,
+        paciente_id: paciente?.id ?? null,
         agendamento_id: nova.agendamentoId ?? null,
-        telefone: telefone ?? String(nova.telefone ?? paciente.whatsapp ?? ''),
+        telefone: telefone ?? String(nova.telefone ?? paciente?.whatsapp ?? ''),
         tipo: nova.tipo,
         direcao: 'saida',
         conteudo: nova.conteudo,
         status: erro ? 'falhou' : 'pendente',
         erro,
+        consentimento_externo: consentimentoExterno,
       },
     });
     return { mensagem, erro };
@@ -227,7 +247,10 @@ export async function processarEnvio(
   if (msg.erro === 'enviando') return marcarFalha(msg.id, 'envio_incerto');
 
   const clinicaId = msg.clinica_id;
-  if (!msg.paciente || !msg.paciente.aceita_whatsapp) return marcarFalha(msg.id, 'sem_consentimento');
+  // Com paciente: vale o consentimento ATUAL do cadastro. Sem paciente: só com consentimento externo gravado.
+  if (msg.paciente ? !msg.paciente.aceita_whatsapp : !msg.consentimento_externo) {
+    return marcarFalha(msg.id, 'sem_consentimento');
+  }
   if (msg.tipo === 'lembrete' && msg.agendamento && msg.agendamento.status !== 'agendado') {
     return marcarFalha(msg.id, 'agendamento_alterado');
   }

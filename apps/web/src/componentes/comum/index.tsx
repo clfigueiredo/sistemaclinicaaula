@@ -7,6 +7,7 @@
  *   <AvisoLimite codigo="max_profissionais" />   // alerta quando o plano não permite mais
  *   <UsoRecurso codigo="max_profissionais" />    // "1 de 1 usados"
  *   <PaginaEmConstrucao titulo="..." />
+ *   <RecursoIndisponivel nome="Financeiro" />   // página de recurso fora do plano (usado por RotaClinica recurso=...)
  */
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -147,5 +148,21 @@ export function PaginaEmConstrucao({ titulo, descricao }: { titulo: string; desc
         descricao="Esta tela será implementada na próxima fase."
       />
     </div>
+  );
+}
+
+/** Página de um recurso que o plano da clínica não inclui (guard `<RotaClinica recurso="..." />`). */
+export function RecursoIndisponivel({ nome }: { nome?: string }) {
+  return (
+    <EstadoVazio
+      icone={<Sparkles className="size-5" />}
+      titulo={nome ? `${nome} não está no seu plano` : 'Recurso não disponível no seu plano'}
+      descricao="Faça upgrade do plano para liberar esta função."
+      acao={
+        <Link to="/configuracoes" className="text-sm font-medium text-primary underline-offset-4 hover:underline">
+          Ver meu plano
+        </Link>
+      }
+    />
   );
 }

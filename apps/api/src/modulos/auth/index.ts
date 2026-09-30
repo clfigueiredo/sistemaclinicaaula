@@ -8,7 +8,8 @@
  *        reenvia o login com `clinicaId`. (Só lista clínicas em que a senha confere.)
  *   POST /auth/cadastro      { nomeClinica, documento, responsavel, email, telefone, senha }
  *        → 201 { token, usuario, clinica }. Cria em UMA transação: clínica + usuário admin +
- *        assinatura (status 'teste', expira_em null) no plano marcado como plano_cadastro.
+ *        assinatura (status 'teste', expira_em null) no plano marcado como plano_cadastro. A clínica recebe
+ *        um `slug` único gerado do nome (utils/slug.ts — URL pública do agendamento online).
  *
  * Rate limit: 10 tentativas/minuto por IP nas rotas de login e 5/minuto no cadastro (IP real só com
  * TRUST_PROXY configurado atrás do proxy). E-mail inexistente roda bcrypt contra HASH_FALSO (timing).
@@ -19,6 +20,7 @@ import { prisma } from '../../lib/prisma';
 import { assinarTokenClinica, assinarTokenPlataforma } from '../../plugins/auth';
 import { ErroNegocio } from '../../utils/erros';
 import { somenteDigitos, validarCpfOuCnpj } from '../../utils/documento';
+import { gerarSlugUnico } from '../../utils/slug';
 import { conferirSenha, conferirSenhaFalsa, gerarHashSenha } from '../../utils/senha';
 
 export const prefixo = '/auth';
@@ -152,6 +154,8 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
         const clinica = await tx.clinica.create({
           data: {
             nome: dados.nomeClinica,
+            // Fase 2: slug público do agendamento online (admin pode editar em Configurações).
+            slug: await gerarSlugUnico(dados.nomeClinica, tx),
             documento: dados.documento,
             responsavel: dados.responsavel,
             email: dados.email,

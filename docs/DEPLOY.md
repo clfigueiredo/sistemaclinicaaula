@@ -32,13 +32,16 @@ REDIS_PASSWORD=$(openssl rand -hex 32)
 JWT_SECRET=$(openssl rand -hex 32)
 WPPCONNECT_SECRET_KEY=$(openssl rand -hex 32)
 WEBHOOK_TOKEN=$(openssl rand -hex 32)
+CHAVE_CRIPTOGRAFIA=$(openssl rand -hex 32)
 EOF
 chmod 600 .env.prod
 ```
 
 Todas as variáveis acima são obrigatórias (`${VAR:?}` no compose). Com `NODE_ENV=production` a API
 **se recusa a subir** se `JWT_SECRET`, `WEBHOOK_TOKEN` ou `WPPCONNECT_SECRET_KEY` tiverem menos de 32
-caracteres ou contiverem `troque`/`exemplo`/`changeme`, ou se a `REDIS_URL` não tiver senha.
+caracteres ou contiverem `troque`/`exemplo`/`changeme`, se a `REDIS_URL` não tiver senha, ou se a
+`CHAVE_CRIPTOGRAFIA` (fase 2 — cifra as credenciais dos gateways de pagamento; **não troque depois de em uso**)
+não tiver 64 caracteres hexadecimais.
 O compose já define `TRUST_PROXY=1` (a API confia só no `X-Forwarded-For` do Caddy) e
 `EXECUTAR_WORKERS=false` (workers no container `worker`).
 
