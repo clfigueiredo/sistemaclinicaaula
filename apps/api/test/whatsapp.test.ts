@@ -325,6 +325,20 @@ describe('webhook', () => {
     expect(r2.json()).toMatchObject({ acao: 'duplicada' });
     expect(await prisma.mensagemWhatsapp.count({ where: { clinica_id: c.clinica.id, direcao: 'entrada' } })).toBe(1);
     expect(jobs).toHaveLength(0);
+
+    // Segunda barreira: índice único parcial (clinica_id, id_externo) nas mensagens de entrada.
+    await expect(
+      prisma.mensagemWhatsapp.create({
+        data: {
+          clinica_id: c.clinica.id,
+          telefone: paciente.whatsapp!,
+          direcao: 'entrada',
+          conteudo: '1',
+          status: 'recebida',
+          id_externo: entrada[0].id_externo,
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'P2002' });
   });
 
   it('resposta 2 cancela, cria aviso para a recepção e outra resposta recebe instruções uma vez', async () => {
@@ -340,7 +354,10 @@ describe('webhook', () => {
 
     const r = await webhook(msgRecebida(c, paciente.whatsapp!, '2'));
     expect(r.json()).toMatchObject({ acao: 'cancelado' });
-    expect((await prisma.agendamento.findUniqueOrThrow({ where: { id: agendamento.id } })).status).toBe('cancelado');
+    const cancelado = await prisma.agendamento.findUniqueOrThrow({ where: { id: agendamento.id } });
+    expect(cancelado.status).toBe('cancelado');
+    expect(cancelado.motivo_cancelamento).toBe('Cancelado pelo paciente via WhatsApp');
+    expect(cancelado.cancelado_em).toBeInstanceOf(Date);
     await drenarFila();
     expect(fake.enviadas.at(-1)?.texto).toContain('cancelada');
 
@@ -361,6 +378,8 @@ describe('webhook', () => {
       headers: { authorization: `Bearer ${c.tokenRecepcao}` },
     });
     expect(lido.statusCode).toBe(200);
+    const avisoLido = await prisma.mensagemWhatsapp.findUniqueOrThrow({ where: { id: corpo.itens[0].id } });
+    expect(avisoLido.lida_em).toBeInstanceOf(Date);
     const depois = await app.inject({
       method: 'GET',
       url: '/whatsapp/avisos?nao_lidos=true',

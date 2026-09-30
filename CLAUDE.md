@@ -105,14 +105,20 @@ npm run dev:api | dev:web   # só um dos dois
 npm run dev:worker          # workers em processo separado (use com EXECUTAR_WORKERS=false)
 npm run typecheck           # tsc da API e do Web
 npm run build               # tsup (apps/api/dist) + vite build (apps/web/dist)
-npm test                    # vitest da API (banco clinica_teste, criado automaticamente)
+npm test                    # vitest da API (banco clinica_teste, criado automaticamente) — ~11 min no SMB
+npm run e2e                 # smoke test E2E (Playwright, apps/web/e2e/smoke) — exige `npm run dev` rodando
 npm run db:studio           # Prisma Studio
 ```
 
 - O web chama a API por `/api/*` (proxy do Vite remove o `/api`). Rotas da API **não** têm prefixo `/api`.
 - No disco de rede a API leva ~30–90 s para subir em dev (e para reiniciar no `tsx watch`). É normal.
-- Nova migration: edite `schema.prisma` e rode `npm run db:migrate -- --name <nome>`.
-  ⚠️ Na fase 2 (agentes em paralelo) **não** altere o schema sem coordenação com o orquestrador.
+- Nova migration: edite `schema.prisma` e rode `npm run db:migrate -- --name <nome>`. Índices parciais
+  e triggers vão em SQL manual na própria migration (use `--create-only`, edite e rode `db:migrate` de novo).
+  O default de `clinica_id` no schema precisa ser exatamente `dbgenerated("(current_setting('app.clinica_id'::text))::uuid")`
+  (forma normalizada pelo Postgres); do contrário o `migrate dev` detecta drift e pede uma migration nova a cada execução.
+- E2E: na primeira vez instale o browser: `cd apps/web && npx playwright install chromium`.
+  Screenshots e `relatorio.txt` (erros de console e HTTP 4xx/5xx) em `apps/web/e2e/capturas/` (ignorado no git).
+  Na primeira carga o Vite no SMB é lento (1–2 min por página nova) — os timeouts do Playwright já consideram isso.
 
 ### Credenciais do seed (apenas desenvolvimento)
 
@@ -132,14 +138,18 @@ de **Teste grátis** (tudo limitado a 1), crie uma clínica nova em `/cadastro`.
 
 - Cada domínio é um diretório `apps/api/src/modulos/<nome>/` com `index.ts` exportando
   `default` (plugin `FastifyPluginAsyncZod`) e `prefixo`. **Todos já estão registrados** em
-  `src/modulos/index.ts` — não edite esse arquivo. Crie arquivos auxiliares na própria pasta
+  `src/modulos/index.ts` (só mexa ao criar um módulo novo). Crie arquivos auxiliares na própria pasta
   (`rotas.ts`, `servico.ts`, `esquemas.ts`…).
-- Módulos: `auth` e `me` (prontos); `admin-planos`, `admin-clinicas`, `profissionais` (+ horários
-  e bloqueios), `convenios`, `usuarios`, `pacientes` (+ alergias/medicações), `prontuario` (+ anexos),
-  `agendamentos`, `whatsapp` (+ webhook `POST /webhooks/whatsapp`). Cada stub traz no topo as
-  rotas previstas, guards e regras.
-- **Não** instale dependências nem edite arquivos compartilhados (`plugins/`, `utils/`, `app.ts`,
-  `schema.prisma`, `rotas/index.tsx`, `api/cliente.ts`…) sem combinar com o orquestrador.
+- Módulos (todos implementados): `auth`, `me` (+ `GET /me/onboarding`), `admin-planos`, `admin-clinicas`,
+  `profissionais` (+ horários e bloqueios), `convenios`, `usuarios`, `pacientes` (+ alergias/medicações),
+  `prontuario` (+ anexos), `agendamentos`, `whatsapp` (+ webhook `POST /webhooks/whatsapp`). Cada
+  `index.ts` traz no topo as rotas, guards e regras.
+- Bloqueios de agenda: cadastro em `/profissionais/bloqueios` (GET/POST/DELETE); leitura para a agenda em
+  `GET /agendamentos/bloqueios` (profissional logado só vê os seus + os da clínica). Não existe `/bloqueios`.
+- Cancelamento de agendamento grava `motivo_cancelamento` + `cancelado_em` (não mexe em `observacoes`);
+  pelo WhatsApp o motivo é `MOTIVO_CANCELAMENTO_WHATSAPP` ("Cancelado pelo paciente via WhatsApp").
+- Arquivos compartilhados (`plugins/`, `utils/`, `app.ts`, `schema.prisma`, `rotas/index.tsx`,
+  `api/cliente.ts`…) afetam todos os módulos: mudanças neles pedem testes da suíte inteira.
 
 ### API — autenticação e papéis (`src/plugins/auth.ts`)
 
@@ -227,7 +237,10 @@ await request.db.$transaction(async (tx) => {
 - `src/servicos/whatsapp/whatsappService.ts`: interface `WhatsappService` com `iniciarSessao(clinicaId)`,
   `obterQrCode(clinicaId)`, `status(clinicaId)`, `desconectar(clinicaId)`,
   `enviarMensagem(clinicaId, telefone, texto)`, `interpretarWebhook(corpo)` + `nomeSessao(clinicaId)`.
-  Hoje lança "não implementado" — o módulo WhatsApp implementa (fetch nativo). Nenhum outro módulo chama o WPPConnect.
+  Implementação atual: `wppconnectAdapter.ts` (fetch nativo); `fakeAdapter.ts` nos testes. Nenhum outro módulo chama o WPPConnect.
+- Avisos à recepção (resposta "2"): `mensagens_whatsapp` com `tipo = 'aviso'`, direção entrada, `lida_em`
+  nulo = não lido (`GET /whatsapp/avisos`, `POST /whatsapp/avisos/:id/lido`). Webhook idempotente por
+  advisory lock + índice único parcial `(clinica_id, id_externo)` das mensagens de entrada.
 - `src/servicos/filas.ts`: `NOMES_FILAS.ENVIO_WHATSAPP` / `NOMES_FILAS.LEMBRETES`, `obterFila(nome)`,
   `criarWorker(nome, processador)`, `obterConexaoRedis()`, `INTERVALO_ENVIO_MS` (20–40 s),
   tipos `JobEnvioWhatsapp`/`JobLembretes`, `fecharFilas()`.
@@ -257,7 +270,17 @@ await request.db.$transaction(async (tx) => {
   Formulários: `react-hook-form` + `zodResolver` + `Form/FormField/...` de `@/componentes/ui/form`;
   feedback com `toast` do `sonner`. Diálogos com `Dialog`/`Sheet`. Máscaras/validações/datas em `@/lib/formatos`.
 - **Papéis no front**: `PAPEIS_ROTA` em `src/rotas/navegacao.ts` (ex.: `PAPEIS_ROTA.prontuario` para
-  esconder abas de prontuário da recepção). Só UX — o backend é quem garante.
+  esconder abas de prontuário da recepção). Só UX — o backend é quem garante. Profissional vê
+  Profissionais em modo somente leitura (edição só admin; bloqueios admin e recepção).
+- **Topo do app da clínica**: `Estrutura` aceita `acoesTopo`; o `LayoutClinica` coloca ali o
+  `SinoAvisos` (admin e recepção, se o plano tiver `whatsapp`): contador de não lidos com polling de 60 s,
+  popover com a lista, "marcar como lido" e links para `/agenda?agendamento=<id>` (abre o painel e vai
+  até a data) e para a ficha do paciente.
+- **Guards**: `RotaPublica` redireciona o usuário já logado para o mesmo destino que a página usaria
+  (`/cadastro` → `/onboarding`; login → `state.de` ou `/agenda`), porque ela re-renderiza antes do `navigate()`.
+- **Tailwind 4 + `space-y-*`**: o espaçamento vira `margin-bottom` nos filhos; não passe `mb-0`/`mb-*`
+  para um filho de `space-y` (anula o espaço). Em `AlertDescription` (grid), envolva texto com
+  `<strong>`/`<Link>` num único `<p>` para não quebrar em linhas.
 - **UI**: componentes shadcn em `@/componentes/ui/*` (button, input, label, card, table, dialog,
   dropdown-menu, select, textarea, badge, tabs, sonner, form, checkbox, switch, calendar, popover,
   alert, skeleton, separator, sheet, avatar, tooltip, scroll-area). Ícones `lucide-react`. Cores via
@@ -274,10 +297,13 @@ await request.db.$transaction(async (tx) => {
 - [x] Auth (login super admin / usuários da clínica) + auto-cadastro
 - [x] Plugins compartilhados: auth, tenant (`request.db`), recursos/limites, erros, logAcesso + testes
 - [x] Web: base (tema, shadcn, router completo, guards, layouts, login/cadastro, onboarding, configurações)
-- [ ] Painel admin: planos, recursos, clínicas
-- [ ] Clínica: profissionais + grade de horários + convênios
-- [ ] Usuários da clínica
-- [ ] Pacientes
-- [ ] Agenda
-- [ ] Prontuário + anexos
-- [ ] WhatsApp: conexão QR, lembrete, confirmação
+- [x] Painel admin: planos, recursos, clínicas
+- [x] Clínica: profissionais + grade de horários + convênios
+- [x] Usuários da clínica
+- [x] Pacientes
+- [x] Agenda
+- [x] Prontuário + anexos
+- [x] WhatsApp: conexão QR, lembrete, confirmação, avisos à recepção (sino)
+- [x] Integração (fase 3): migration `ajustes_integracao`, onboarding real, QA E2E (Playwright) dos 5 fluxos
+- [ ] Pendente: teste manual do WhatsApp com celular real (passo a passo em `docs/SETUP_LOCAL.md`)
+- [ ] Fase 2 do produto (financeiro, agendamento online etc. — ver `docs/ARQUITETURA.md` §10)

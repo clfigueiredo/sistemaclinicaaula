@@ -24,7 +24,8 @@ const TODOS: Papel[] = ['admin', 'recepcao', 'profissional'];
 export const PAPEIS_ROTA = {
   agenda: TODOS,
   pacientes: TODOS,
-  profissionais: ['admin', 'recepcao'] as Papel[],
+  /** Profissional vê lista e detalhe em modo somente leitura (edição só admin; bloqueios admin e recepção). */
+  profissionais: TODOS,
   convenios: ['admin', 'recepcao'] as Papel[],
   usuarios: ['admin'] as Papel[],
   whatsapp: ['admin'] as Papel[],

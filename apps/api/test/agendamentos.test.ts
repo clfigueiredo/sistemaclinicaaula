@@ -321,7 +321,10 @@ describe('editar e status', () => {
     const canc = await patch('cancelado', 'Paciente viajou');
     expect(canc.statusCode).toBe(200);
     expect(canc.json().status).toBe('cancelado');
-    expect(canc.json().observacoes).toMatch(/Motivo: Paciente viajou/);
+    expect(canc.json().motivo_cancelamento).toBe('Paciente viajou');
+    expect(canc.json().cancelado_em).toBeTruthy();
+    // O motivo não é mais concatenado nas observações.
+    expect(canc.json().observacoes ?? '').not.toMatch(/Paciente viajou/);
     const reabrir = await patch('agendado');
     expect(reabrir.statusCode).toBe(409);
     // cancelado não pode ser remarcado; e libera o horário

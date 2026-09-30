@@ -16,8 +16,8 @@
  *   PUT    /agendamentos/:id        editar/remarcar (mesmas validações; não consome limite)
  *   PATCH  /agendamentos/:id/status { status, motivo? }
  *            agendado → confirmado|compareceu|cancelado|faltou; confirmado → compareceu|cancelado|faltou;
- *            compareceu → atendido. Demais ⇒ 409 transicao_invalida. Motivo do cancelamento vai
- *            para `observacoes` (não há coluna própria).
+ *            compareceu → atendido. Demais ⇒ 409 transicao_invalida. Cancelar grava
+ *            `motivo_cancelamento` e `cancelado_em`.
  *   Sem DELETE: cancelar é o caminho.
  *
  * Decisões:
@@ -33,7 +33,6 @@ import type { FastifyRequest } from 'fastify';
 import type { Prisma, StatusAgendamento } from '@prisma/client';
 import { z } from 'zod';
 import { addMinutes, differenceInCalendarDays } from 'date-fns';
-import { formatInTimeZone } from 'date-fns-tz';
 import { autenticarClinica, exigirPapel } from '../../plugins/auth';
 import { assegurarLimite } from '../../plugins/recursos';
 import { ErroNegocio, erros, ou404 } from '../../utils/erros';
@@ -134,6 +133,8 @@ const selecaoAgendamento = {
   tipo: true,
   status: true,
   observacoes: true,
+  motivo_cancelamento: true,
+  cancelado_em: true,
   criado_por: true,
   lembrete_enviado_em: true,
   criado_em: true,
@@ -211,10 +212,6 @@ async function validarHorario(
   }
   await validarBloqueio(tx, a.profissionalId, a.inicio, a.fim);
   await validarConflito(tx, a.profissionalId, a.inicio, a.fim, a.ignorarId);
-}
-
-function carimbo(request: FastifyRequest, fuso: string) {
-  return `${formatInTimeZone(new Date(), fuso, 'dd/MM/yyyy HH:mm')} por ${request.usuarioClinica!.nome}`;
 }
 
 // ----------------------------------------------------------------------------- rotas
@@ -427,11 +424,10 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
           { status_atual: atual.status, permitidos: TRANSICOES[atual.status] },
         );
       }
-      const dados: { status: StatusAgendamento; observacoes?: string } = { status };
+      const dados: Prisma.AgendamentoUpdateManyMutationInput = { status };
       if (status === 'cancelado') {
-        const fuso = await obterFuso(request.db, request.clinicaId);
-        const nota = `[Cancelado em ${carimbo(request, fuso)}]${motivo ? ` Motivo: ${motivo}` : ''}`;
-        dados.observacoes = atual.observacoes ? `${atual.observacoes}\n${nota}` : nota;
+        dados.motivo_cancelamento = motivo || null;
+        dados.cancelado_em = new Date();
       }
       // updateMany com o status atual no where: evita sobrescrever uma mudança concorrente (ex.: WhatsApp).
       const r = await request.db.agendamento.updateMany({ where: { id: atual.id, status: atual.status }, data: dados });

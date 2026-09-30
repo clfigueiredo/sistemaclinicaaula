@@ -120,9 +120,12 @@ export default function PaginaWhatsApp() {
           <AlertTriangle className="size-4" />
           <AlertTitle>Integração não oficial</AlertTitle>
           <AlertDescription>
-            A conexão usa o WhatsApp Web do celular da clínica (não é a API oficial da Meta). Mantenha o celular com
-            internet. As mensagens são enviadas com intervalo de 20 a 40 segundos e{' '}
-            <strong>só para pacientes que consentiram</strong> em receber mensagens no cadastro.
+            {/* AlertDescription é grid: o texto precisa de um único <p> para o <strong> não virar linha própria. */}
+            <p>
+              A conexão usa o WhatsApp Web do celular da clínica (não é a API oficial da Meta). Mantenha o celular com
+              internet. As mensagens são enviadas com intervalo de 20 a 40 segundos e{' '}
+              <strong>só para pacientes que consentiram</strong> em receber mensagens no cadastro.
+            </p>
           </AlertDescription>
         </Alert>
 

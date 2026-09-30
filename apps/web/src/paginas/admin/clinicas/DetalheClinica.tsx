@@ -93,13 +93,12 @@ function Conteudo({ d }: { d: DetalheClinicaAdmin }) {
 
   return (
     <div className="space-y-6">
+      {/* Sem className="mb-0": no Tailwind 4 o space-y-6 usa margin-bottom e o mb-0 anulava o espaçamento. */}
       <CabecalhoPagina
-        className="mb-0"
         titulo={
           <span className="flex flex-wrap items-center gap-2">
             {clinica.nome}
-            <BadgeSituacao ativa={ativa} />
-            <BadgeStatusAssinatura status={assinatura?.status ?? null} />
+            <BadgeSituacao ativa={ativa} rotuloAtivo="Clínica ativa" rotuloInativo="Clínica inativa" />
           </span>
         }
         descricao={`${mascararCpfCnpj(clinica.documento)} · cliente desde ${formatarData(clinica.criado_em)}`}

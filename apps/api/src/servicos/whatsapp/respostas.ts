@@ -10,7 +10,7 @@
  *     4. casa com o lembrete ENVIADO mais recente para aquele telefone NA MESMA CLÍNICA cujo
  *        agendamento ainda é futuro e `agendado`;
  *     5. "1" → agendamento confirmado + resposta; "2" → cancelado + resposta + aviso para a
- *        recepção (mensagem tipo `aviso`, direção entrada, status `pendente` = não lido);
+ *        recepção (mensagem tipo `aviso`, direção entrada, `lida_em` nulo = não lido);
  *        outro texto → responde UMA vez com as instruções; sem lembrete pendente → só registra.
  *   As respostas saem pela fila (enfileirarMensagem), depois do commit.
  */
@@ -27,6 +27,8 @@ import {
 } from './mensagens';
 import { variantesTelefone } from './telefone';
 import type { EventoWhatsapp, MensagemRecebida } from './tipos';
+
+export const MOTIVO_CANCELAMENTO_WHATSAPP = 'Cancelado pelo paciente via WhatsApp';
 
 export type ResultadoEvento =
   | { acao: 'ignorado'; motivo: string }
@@ -62,107 +64,120 @@ async function processarMensagemRecebida(clinicaId: string, msg: MensagemRecebid
   const telefones = variantesTelefone(msg.telefone);
   const respostas: NovaMensagem[] = [];
 
-  const resultado = await prisma.$transaction(async (tx): Promise<ResultadoEvento> => {
-    if (msg.idExterno) {
-      await tx.$executeRawUnsafe('SELECT pg_advisory_xact_lock(hashtext($1))', `webhook:${clinicaId}:${msg.idExterno}`);
-      const repetida = await tx.mensagemWhatsapp.findFirst({
-        where: { clinica_id: clinicaId, direcao: 'entrada', id_externo: msg.idExterno },
-        select: { id: true },
-      });
-      if (repetida) return { acao: 'duplicada', clinicaId };
-    }
-
-    const lembrete = await tx.mensagemWhatsapp.findFirst({
-      where: {
-        clinica_id: clinicaId,
-        tipo: 'lembrete',
-        direcao: 'saida',
-        status: 'enviada',
-        telefone: { in: telefones },
-        agendamento: { status: 'agendado', inicio: { gt: new Date() } },
-      },
-      orderBy: { criado_em: 'desc' },
-      include: { agendamento: { include: { paciente: true, profissional: true } } },
-    });
-
-    const agendamento = lembrete?.agendamento ?? null;
-    const pacienteId =
-      agendamento?.paciente_id ??
-      (
-        await tx.paciente.findFirst({
-          where: { clinica_id: clinicaId, whatsapp: { in: telefones } },
+  const processarNaTransacao = () =>
+    prisma.$transaction(async (tx): Promise<ResultadoEvento> => {
+      if (msg.idExterno) {
+        await tx.$executeRawUnsafe('SELECT pg_advisory_xact_lock(hashtext($1))', `webhook:${clinicaId}:${msg.idExterno}`);
+        const repetida = await tx.mensagemWhatsapp.findFirst({
+          where: { clinica_id: clinicaId, direcao: 'entrada', id_externo: msg.idExterno },
           select: { id: true },
-          orderBy: { criado_em: 'desc' },
-        })
-      )?.id ??
-      null;
-
-    const entrada = await tx.mensagemWhatsapp.create({
-      data: {
-        clinica_id: clinicaId,
-        agendamento_id: agendamento?.id ?? null,
-        paciente_id: pacienteId,
-        telefone: msg.telefone,
-        tipo: null,
-        direcao: 'entrada',
-        conteudo: msg.texto.slice(0, 4000),
-        status: 'recebida',
-        id_externo: msg.idExterno,
-        enviada_em: msg.recebidaEm,
-      },
-    });
-
-    if (!agendamento) return { acao: 'registrada', clinicaId, mensagemId: entrada.id };
-
-    const dados: DadosLembrete = {
-      paciente: agendamento.paciente.nome,
-      clinica: clinica.nome,
-      profissional: agendamento.profissional.nome,
-      inicio: agendamento.inicio,
-      fuso,
-    };
-    const base = { clinicaId, pacienteId: agendamento.paciente_id, agendamentoId: agendamento.id, tipo: 'confirmacao' as const };
-    const resposta = interpretarResposta(msg.texto);
-
-    if (resposta === 'confirmar' || resposta === 'cancelar') {
-      const novoStatus = resposta === 'confirmar' ? 'confirmado' : 'cancelado';
-      const { count } = await tx.agendamento.updateMany({
-        where: { id: agendamento.id, clinica_id: clinicaId, status: 'agendado' },
-        data: { status: novoStatus },
-      });
-      if (count === 0) return { acao: 'registrada', clinicaId, mensagemId: entrada.id };
-
-      if (resposta === 'confirmar') {
-        respostas.push({ ...base, conteudo: textoConfirmado(dados) });
-        return { acao: 'confirmado', clinicaId, mensagemId: entrada.id };
+        });
+        if (repetida) return { acao: 'duplicada', clinicaId };
       }
-      respostas.push({ ...base, conteudo: textoCancelado(dados) });
-      await tx.mensagemWhatsapp.create({
+
+      const lembrete = await tx.mensagemWhatsapp.findFirst({
+        where: {
+          clinica_id: clinicaId,
+          tipo: 'lembrete',
+          direcao: 'saida',
+          status: 'enviada',
+          telefone: { in: telefones },
+          agendamento: { status: 'agendado', inicio: { gt: new Date() } },
+        },
+        orderBy: { criado_em: 'desc' },
+        include: { agendamento: { include: { paciente: true, profissional: true } } },
+      });
+
+      const agendamento = lembrete?.agendamento ?? null;
+      const pacienteId =
+        agendamento?.paciente_id ??
+        (
+          await tx.paciente.findFirst({
+            where: { clinica_id: clinicaId, whatsapp: { in: telefones } },
+            select: { id: true },
+            orderBy: { criado_em: 'desc' },
+          })
+        )?.id ??
+        null;
+
+      const entrada = await tx.mensagemWhatsapp.create({
         data: {
           clinica_id: clinicaId,
-          agendamento_id: agendamento.id,
-          paciente_id: agendamento.paciente_id,
+          agendamento_id: agendamento?.id ?? null,
+          paciente_id: pacienteId,
           telefone: msg.telefone,
-          tipo: 'aviso',
+          tipo: null,
           direcao: 'entrada',
-          conteudo: textoAvisoCancelamento(dados),
-          // Sem coluna "lida": para avisos, pendente = não lido, recebida = lido.
-          status: 'pendente',
+          conteudo: msg.texto.slice(0, 4000),
+          status: 'recebida',
+          id_externo: msg.idExterno,
+          enviada_em: msg.recebidaEm,
         },
       });
-      return { acao: 'cancelado', clinicaId, mensagemId: entrada.id };
-    }
 
-    // Resposta não reconhecida: instruções uma única vez por agendamento.
-    const jaInstruiu = await tx.mensagemWhatsapp.count({
-      where: { clinica_id: clinicaId, agendamento_id: agendamento.id, tipo: 'confirmacao', direcao: 'saida' },
+      if (!agendamento) return { acao: 'registrada', clinicaId, mensagemId: entrada.id };
+
+      const dados: DadosLembrete = {
+        paciente: agendamento.paciente.nome,
+        clinica: clinica.nome,
+        profissional: agendamento.profissional.nome,
+        inicio: agendamento.inicio,
+        fuso,
+      };
+      const base = { clinicaId, pacienteId: agendamento.paciente_id, agendamentoId: agendamento.id, tipo: 'confirmacao' as const };
+      const resposta = interpretarResposta(msg.texto);
+
+      if (resposta === 'confirmar' || resposta === 'cancelar') {
+        const novoStatus = resposta === 'confirmar' ? 'confirmado' : 'cancelado';
+        const { count } = await tx.agendamento.updateMany({
+          where: { id: agendamento.id, clinica_id: clinicaId, status: 'agendado' },
+          data:
+            novoStatus === 'cancelado'
+              ? { status: novoStatus, motivo_cancelamento: MOTIVO_CANCELAMENTO_WHATSAPP, cancelado_em: new Date() }
+              : { status: novoStatus },
+        });
+        if (count === 0) return { acao: 'registrada', clinicaId, mensagemId: entrada.id };
+
+        if (resposta === 'confirmar') {
+          respostas.push({ ...base, conteudo: textoConfirmado(dados) });
+          return { acao: 'confirmado', clinicaId, mensagemId: entrada.id };
+        }
+        respostas.push({ ...base, conteudo: textoCancelado(dados) });
+        await tx.mensagemWhatsapp.create({
+          data: {
+            clinica_id: clinicaId,
+            agendamento_id: agendamento.id,
+            paciente_id: agendamento.paciente_id,
+            telefone: msg.telefone,
+            tipo: 'aviso',
+            direcao: 'entrada',
+            conteudo: textoAvisoCancelamento(dados),
+            // Aviso interno (não é enviado): lida_em nulo = não lido.
+            status: 'recebida',
+          },
+        });
+        return { acao: 'cancelado', clinicaId, mensagemId: entrada.id };
+      }
+
+      // Resposta não reconhecida: instruções uma única vez por agendamento.
+      const jaInstruiu = await tx.mensagemWhatsapp.count({
+        where: { clinica_id: clinicaId, agendamento_id: agendamento.id, tipo: 'confirmacao', direcao: 'saida' },
+      });
+      if (jaInstruiu === 0) {
+        respostas.push({ ...base, conteudo: textoInstrucoes() });
+        return { acao: 'instrucoes', clinicaId, mensagemId: entrada.id };
+      }
+      return { acao: 'registrada', clinicaId, mensagemId: entrada.id };
     });
-    if (jaInstruiu === 0) {
-      respostas.push({ ...base, conteudo: textoInstrucoes() });
-      return { acao: 'instrucoes', clinicaId, mensagemId: entrada.id };
-    }
-    return { acao: 'registrada', clinicaId, mensagemId: entrada.id };
-  });
+
+  let resultado: ResultadoEvento;
+  try {
+    resultado = await processarNaTransacao();
+  } catch (e) {
+    // Índice único parcial (clinica_id, id_externo) de entrada: segunda barreira contra duplicados.
+    if ((e as { code?: string })?.code === 'P2002') return { acao: 'duplicada', clinicaId };
+    throw e;
+  }
 
   for (const r of respostas) {
     await enfileirarMensagem(r);

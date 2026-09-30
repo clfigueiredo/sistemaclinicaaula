@@ -104,10 +104,12 @@ export function AvisoLimite({ codigo, className }: { codigo: CodigoRecurso; clas
       <Sparkles className="size-4" />
       <AlertTitle>Limite do plano</AlertTitle>
       <AlertDescription>
-        {mensagem}{' '}
-        <Link to="/configuracoes" className="font-medium text-primary underline-offset-4 hover:underline">
-          Ver meu plano
-        </Link>
+        <p>
+          {mensagem}{' '}
+          <Link to="/configuracoes" className="font-medium text-primary underline-offset-4 hover:underline">
+            Ver meu plano
+          </Link>
+        </p>
       </AlertDescription>
     </Alert>
   );

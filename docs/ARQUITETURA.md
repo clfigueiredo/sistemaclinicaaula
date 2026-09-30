@@ -113,12 +113,12 @@ O `admin` criado no cadastro **não conta** no limite de recepcionistas.
 - `bloqueios_agenda` — profissional_id (null = clínica toda), inicio, fim, motivo
 - `convenios` — nome, ativo
 - `pacientes` — nome, cpf, nascimento, sexo, telefone, whatsapp, email, endereço, convenio_id, numero_carteirinha, contato_emergencia, `aceita_whatsapp`, observacoes
-- `agendamentos` — paciente_id, profissional_id, inicio, fim, tipo (`particular|convenio`), convenio_id, status, observacoes, criado_por
+- `agendamentos` — paciente_id, profissional_id, inicio, fim, tipo (`particular|convenio`), convenio_id, status, observacoes, motivo_cancelamento, cancelado_em, criado_por, lembrete_enviado_em
 - `prontuario_registros` — paciente_id, profissional_id, agendamento_id, texto, criado_em (**sem update/delete**; correção = novo registro)
 - `paciente_alergias` / `paciente_medicacoes`
 - `anexos` — paciente_id, registro_id, nome_arquivo, caminho, tamanho, enviado_por
 - `whatsapp_sessoes` — status da conexão
-- `mensagens_whatsapp` — agendamento_id, tipo (`lembrete|confirmacao|aviso`), direcao, conteudo, status, enviada_em
+- `mensagens_whatsapp` — agendamento_id, paciente_id, telefone, tipo (`lembrete|confirmacao|aviso`), direcao, conteudo, status, id_externo, enviada_em, lida_em (avisos à recepção: nulo = não lido). Índice único parcial `(clinica_id, id_externo)` para mensagens de entrada (idempotência do webhook).
 - `logs_acesso` — usuario_id, acao, entidade, entidade_id, ip, criado_em
 
 Status de agendamento: `agendado → confirmado → compareceu → atendido`, além de `cancelado` e `faltou`.
@@ -128,7 +128,14 @@ Status de agendamento: `agendado → confirmado → compareceu → atendido`, al
 1. Job diário (BullMQ repeatable) seleciona agendamentos de amanhã com status `agendado` e paciente `aceita_whatsapp`.
 2. Para cada um: verifica recurso `whatsapp` e `max_mensagens` → enfileira envio na fila da clínica.
 3. Worker envia com intervalo aleatório (20–40 s) por sessão.
-4. Webhook do WPPConnect recebe resposta: `1` → `confirmado`; `2` → `cancelado` + aviso à recepção.
+4. Webhook do WPPConnect recebe resposta: `1` → `confirmado`; `2` → `cancelado` (motivo "Cancelado pelo paciente via WhatsApp") + aviso à recepção (sino no topo do app para admin e recepção).
+
+### Rotas de bloqueios de agenda
+
+O contrato inicial previa `GET /bloqueios`; ficou assim (sem alias):
+
+- `GET/POST /profissionais/bloqueios`, `DELETE /profissionais/bloqueios/:id` — cadastro de bloqueios (tela do profissional; admin e recepção criam/removem).
+- `GET /agendamentos/bloqueios?inicio&fim[&profissionalId]` — leitura para a agenda (profissional logado só vê os seus + os da clínica toda).
 
 ## 9. LGPD / CFM (mínimo desde o início)
 

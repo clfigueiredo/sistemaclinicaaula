@@ -51,7 +51,14 @@ export function RotaAdmin({ children }: { children?: ReactNode }) {
 
 export function RotaPublica({ tipo }: { tipo: 'clinica' | 'admin' }) {
   const { tokenClinica, tokenAdmin } = useAuth();
-  if (tipo === 'clinica' && tokenClinica) return <Navigate to="/agenda" replace />;
-  if (tipo === 'admin' && tokenAdmin) return <Navigate to="/admin" replace />;
+  const location = useLocation();
+  // Ao logar/cadastrar, o token muda antes do navigate() da página: este guard re-renderiza primeiro,
+  // então ele precisa mandar para o MESMO destino (senão o cadastro cairia na agenda e não no onboarding,
+  // e o login ignoraria a rota de origem `state.de`).
+  const de = (location.state as { de?: string } | null)?.de;
+  if (tipo === 'clinica' && tokenClinica) {
+    return <Navigate to={location.pathname === '/cadastro' ? '/onboarding' : (de ?? '/agenda')} replace />;
+  }
+  if (tipo === 'admin' && tokenAdmin) return <Navigate to={de ?? '/admin'} replace />;
   return <Outlet />;
 }

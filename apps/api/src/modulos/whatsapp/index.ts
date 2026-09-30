@@ -189,18 +189,18 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
         },
         async (request) => {
           const apenasNaoLidos = request.query.nao_lidos === 'true';
-          const where = { tipo: 'aviso' as const, ...(apenasNaoLidos ? { status: 'pendente' as const } : {}) };
+          const where = { tipo: 'aviso' as const, ...(apenasNaoLidos ? { lida_em: null } : {}) };
           const [itens, naoLidos] = await Promise.all([
             request.db.mensagemWhatsapp.findMany({
               where,
-              select: selecaoMensagem,
+              select: { ...selecaoMensagem, lida_em: true },
               orderBy: { criado_em: 'desc' },
               take: request.query.limite,
             }),
-            request.db.mensagemWhatsapp.count({ where: { tipo: 'aviso', status: 'pendente' } }),
+            request.db.mensagemWhatsapp.count({ where: { tipo: 'aviso', lida_em: null } }),
           ]);
           return {
-            itens: itens.map(({ status, ...m }) => ({ ...m, lido: status !== 'pendente' })),
+            itens: itens.map(({ status: _status, ...m }) => ({ ...m, lido: m.lida_em !== null })),
             nao_lidos: naoLidos,
           };
         },
@@ -214,8 +214,11 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
             await request.db.mensagemWhatsapp.findFirst({ where: { id: request.params.id, tipo: 'aviso' } }),
             'Aviso não encontrado.',
           );
-          await request.db.mensagemWhatsapp.update({ where: { id: aviso.id }, data: { status: 'recebida' } });
-          return { id: aviso.id, lido: true };
+          const lidaEm = aviso.lida_em ?? new Date();
+          if (!aviso.lida_em) {
+            await request.db.mensagemWhatsapp.update({ where: { id: aviso.id }, data: { lida_em: lidaEm } });
+          }
+          return { id: aviso.id, lido: true, lida_em: lidaEm };
         },
       );
 

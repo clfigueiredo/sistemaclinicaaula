@@ -7,3 +7,9 @@ uploads/
 coverage/
 .DS_Store
 *.tsbuildinfo
+
+# Playwright (e2e)
+apps/web/e2e/resultados/
+apps/web/e2e/capturas/
+apps/web/test-results/
+apps/web/playwright-report/

@@ -9,6 +9,7 @@ import { useAuth } from '@/contextos/AuthContext';
 
 export const chavesMe = {
   me: ['me'] as const,
+  onboarding: ['me', 'onboarding'] as const,
   adminMe: ['admin', 'me'] as const,
 };
 
@@ -20,6 +21,18 @@ export function useMe() {
     queryFn: () => api.get<Me>('/me'),
     enabled: !!tokenClinica,
     staleTime: 30_000,
+  });
+}
+
+export type ProgressoOnboarding = { profissional: boolean; horarios: boolean; convenios: boolean; whatsapp: boolean };
+
+/** Passos do onboarding já concluídos (somente admin). Fica sob ['me'], então invalidar o /me atualiza. */
+export function useOnboarding() {
+  const { tokenClinica } = useAuth();
+  return useQuery({
+    queryKey: chavesMe.onboarding,
+    queryFn: () => api.get<ProgressoOnboarding>('/me/onboarding'),
+    enabled: !!tokenClinica,
   });
 }
 

@@ -118,7 +118,49 @@ Os workers BullMQ rodam dentro da API em dev (`EXECUTAR_WORKERS=true`). Para rod
 npm run typecheck           # TypeScript da API e do Web
 npm test                    # vitest da API (cria/migra o banco clinica_teste sozinho)
 npm run build               # build de produção dos dois apps
+npm run e2e                 # smoke test E2E no navegador (com `npm run dev` rodando)
 ```
+
+O smoke test E2E usa Playwright (`apps/web/e2e/smoke/*.spec.ts`). Na primeira vez instale o browser:
+`cd apps/web && npx playwright install chromium`. Ele percorre os fluxos do super admin, do auto-cadastro
+(teste grátis e limites), da clínica demo como admin (agenda, pacientes, prontuário, anexo, WhatsApp) e
+dos papéis recepção/profissional (inclusive em 390 px). Screenshots e `relatorio.txt` com erros de console
+e respostas HTTP 4xx/5xx inesperadas ficam em `apps/web/e2e/capturas/`. Cada execução cria uma clínica
+de teste nova (auto-cadastro) e alguns pacientes/agendamentos na Clínica Demo — rode `npm run db:seed`
+depois de `docker compose down -v` se quiser um banco limpo.
+
+## Teste manual do WhatsApp com celular real
+
+Pré-requisitos: containers de pé (`docker compose ps` mostra `clinica-wppconnect`), `npm run dev` rodando
+com `EXECUTAR_WORKERS=true` (padrão) e o `WEBHOOK_TOKEN` do `.env` igual ao usado pelo container (o
+compose lê o mesmo `.env`; se mudar o token, rode `docker compose up -d` de novo). Use um número de
+WhatsApp de teste — a integração é **não oficial** (WPPConnect) e há risco de banimento em uso abusivo.
+
+1. **Conectar o número da clínica**: entre como `admin@demo.local` → menu **WhatsApp** → **Conectar**.
+   Em alguns segundos aparece o QR code. No celular da clínica: WhatsApp → *Aparelhos conectados* →
+   *Conectar um aparelho* → aponte para o QR. A tela passa para **Conectado** e mostra o número.
+2. **Paciente de teste**: em **Pacientes → Novo paciente**, cadastre você mesmo com o **seu** celular
+   (outro número, diferente do conectado) no campo **WhatsApp** e marque o **consentimento** para
+   mensagens de WhatsApp (sem consentimento o lembrete não é enviado).
+3. **Agendamento para amanhã**: na **Agenda**, crie um agendamento para esse paciente **amanhã**, em um
+   horário da grade (status *Agendado*).
+4. **Disparar o lembrete**: na tela **WhatsApp**, clique **Enviar lembretes de amanhã agora** (o job
+   automático roda todo dia às 09:00 no fuso `TZ_PADRAO`). O envio passa pela fila com intervalo
+   aleatório de 20–40 s por clínica — espere até ~1 min. A mensagem aparece em **Histórico de mensagens**
+   como *Enviada* e chega no seu celular.
+5. **Responder**:
+   - `1` → o agendamento fica **Confirmado** na agenda e o paciente recebe a confirmação.
+   - `2` → o agendamento fica **Cancelado** (motivo "Cancelado pelo paciente via WhatsApp", visível no
+     painel do agendamento), o paciente recebe a confirmação do cancelamento e a recepção recebe um
+     **aviso**: o sino no topo (admin e recepção) mostra o contador de não lidos (atualiza a cada 60 s),
+     com links para o agendamento e o paciente e o botão de marcar como lido.
+   - Qualquer outro texto → o paciente recebe as instruções (uma única vez por agendamento).
+   Para testar as duas respostas, crie dois agendamentos (ou repita os passos 3–5).
+6. **Desconectar** (opcional): **WhatsApp → Desconectar**.
+
+Se a resposta não for processada: confira nos logs da API se chegou `POST /webhooks/whatsapp` (401 =
+token diferente entre `.env` e o container) e se o container alcança o host (`host.docker.internal:3333`).
+No plano **Teste grátis** só 1 mensagem é permitida no total (`max_mensagens` = 1).
 
 ### Problemas comuns
 

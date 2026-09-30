@@ -148,6 +148,16 @@ export function PainelAgendamento({
                 </Link>
               </Button>
 
+              {a.status === 'cancelado' && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3">
+                  <p className="mb-1 text-xs font-medium text-destructive">
+                    Cancelado
+                    {a.cancelado_em && ` em ${format(new Date(a.cancelado_em), "dd/MM/yyyy 'às' HH:mm")}`}
+                  </p>
+                  <p className="whitespace-pre-wrap">{a.motivo_cancelamento || 'Motivo não informado.'}</p>
+                </div>
+              )}
+
               {a.observacoes && (
                 <div>
                   <p className="mb-1 text-xs font-medium text-muted-foreground">Observações</p>

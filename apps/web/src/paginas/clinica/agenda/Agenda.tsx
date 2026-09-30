@@ -1,7 +1,7 @@
 // Agenda da clínica (FullCalendar): visão dia/semana/mês, filtro por profissional, bloqueios,
 // criação por clique em horário vazio, detalhes/ações de status e remarcação por arrastar.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
@@ -20,6 +20,7 @@ import { toast } from 'sonner';
 import { mensagemDeErro } from '@/api/cliente';
 import {
   STATUS_REMARCAVEIS,
+  useAgendamento,
   useAgendamentos,
   useBloqueiosAgenda,
   useEditarAgendamento,
@@ -54,7 +55,11 @@ export default function PaginaAgenda() {
 
   const [filtroProf, setFiltroProf] = useState<string>(TODOS);
   const [intervalo, setIntervalo] = useState<{ inicio: string; fim: string } | null>(null);
-  const [selecionadoId, setSelecionadoId] = useState<string | null>(null);
+  // ?agendamento=<id> (link dos avisos do WhatsApp): abre o painel e leva o calendário até a data.
+  const [parametros, setParametros] = useSearchParams();
+  const idLink = parametros.get('agendamento');
+  const [selecionadoId, setSelecionadoId] = useState<string | null>(idLink);
+  const doLink = useAgendamento(idLink);
   const [dialogo, setDialogo] = useState<{ aberto: boolean; sugestao?: SugestaoNovo | null; edicao?: Agendamento | null }>({
     aberto: false,
   });
@@ -112,10 +117,27 @@ export default function PaginaAgenda() {
     return lista;
   }, [agendamentos.data, bloqueios.data, podeAlterar, profissionalId]);
 
-  const selecionado = useMemo(
-    () => (selecionadoId ? (agendamentos.data ?? []).find((a) => a.id === selecionadoId) ?? null : null),
-    [selecionadoId, agendamentos.data],
-  );
+  useEffect(() => {
+    if (!idLink || !doLink.data) return;
+    setSelecionadoId(idLink);
+    calendario.current?.getApi().gotoDate(doLink.data.inicio);
+  }, [idLink, doLink.data, profissionais.isSuccess]);
+
+  const selecionado = useMemo(() => {
+    if (!selecionadoId) return null;
+    const daLista = (agendamentos.data ?? []).find((a) => a.id === selecionadoId);
+    if (daLista) return daLista;
+    return doLink.data?.id === selecionadoId ? doLink.data : null;
+  }, [selecionadoId, agendamentos.data, doLink.data]);
+
+  function fecharPainel() {
+    setSelecionadoId(null);
+    if (idLink) {
+      const novos = new URLSearchParams(parametros);
+      novos.delete('agendamento');
+      setParametros(novos, { replace: true });
+    }
+  }
 
   const podeCriar = podeAlterar && podeCriarPlano;
 
@@ -332,10 +354,10 @@ export default function PaginaAgenda() {
 
       <PainelAgendamento
         agendamento={selecionado}
-        onOpenChange={(a) => !a && setSelecionadoId(null)}
+        onOpenChange={(a) => !a && fecharPainel()}
         podeAlterar={podeAlterar}
         onEditar={(a) => {
-          setSelecionadoId(null);
+          fecharPainel();
           setDialogo({ aberto: true, edicao: a });
         }}
       />

@@ -22,7 +22,8 @@
     "db:studio": "npm run db:studio --prefix apps/api",
     "db:generate": "npm run db:generate --prefix apps/api",
     "docker:up": "docker compose up -d",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "e2e": "npm run e2e --prefix apps/web"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"

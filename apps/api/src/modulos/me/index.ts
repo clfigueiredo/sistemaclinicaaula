@@ -3,10 +3,12 @@
  *
  *   GET /me        (token de clínica) → usuário, clínica, papel, assinatura, plano e
  *                  recursos { [codigo]: { nome, tipo, habilitado, limite, periodo, uso } }
+ *   GET /me/onboarding (admin) → passos do onboarding concluídos
+ *                  { profissional, horarios, convenios, whatsapp } (booleans)
  *   GET /admin/me  (token de plataforma) → dados do super admin
  */
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
-import { autenticarAdmin, autenticarClinica } from '../../plugins/auth';
+import { autenticarAdmin, autenticarClinica, exigirPapel } from '../../plugins/auth';
 import { obterUsoERecursos } from '../../plugins/recursos';
 import { ou404 } from '../../utils/erros';
 
@@ -47,6 +49,21 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
       papel: usuario.papel,
       clinica,
       ...resumo,
+    };
+  });
+
+  app.get('/me/onboarding', { preHandler: exigirPapel('admin') }, async (request) => {
+    const [profissionais, comHorarios, convenios, sessao] = await Promise.all([
+      request.db.profissional.count({ where: { ativo: true } }),
+      request.db.profissional.count({ where: { ativo: true, horarios: { some: {} } } }),
+      request.db.convenio.count({ where: { ativo: true } }),
+      request.db.whatsappSessao.findFirst({ select: { status: true } }),
+    ]);
+    return {
+      profissional: profissionais > 0,
+      horarios: comHorarios > 0,
+      convenios: convenios > 0,
+      whatsapp: sessao?.status === 'conectada',
     };
   });
 

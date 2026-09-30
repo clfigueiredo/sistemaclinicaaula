@@ -59,6 +59,7 @@ export function Estrutura({
   usuario,
   aoSair,
   aviso,
+  acoesTopo,
   children,
 }: {
   itens: ItemMenu[];
@@ -67,6 +68,8 @@ export function Estrutura({
   usuario: { nome: string; detalhe?: string };
   aoSair: () => void;
   aviso?: ReactNode;
+  /** Ações extras no topo, à esquerda do menu do usuário (ex.: sino de avisos). */
+  acoesTopo?: ReactNode;
   children: ReactNode;
 }) {
   const [menuAberto, setMenuAberto] = useState(false);
@@ -115,7 +118,8 @@ export function Estrutura({
             <Menu className="size-5" />
           </Button>
           <span className="truncate text-sm font-medium text-muted-foreground">{atual?.rotulo}</span>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-1">
+            {acoesTopo}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="h-9 gap-2 px-2">

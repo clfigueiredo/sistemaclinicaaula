@@ -39,7 +39,7 @@ export type MensagemWhatsapp = {
   } | null;
 };
 
-export type AvisoWhatsapp = Omit<MensagemWhatsapp, 'status'> & { lido: boolean };
+export type AvisoWhatsapp = Omit<MensagemWhatsapp, 'status'> & { lido: boolean; lida_em: string | null };
 
 export type ResultadoLembretes = {
   selecionados: number;
@@ -95,6 +95,7 @@ export function useMensagensWhatsapp(pagina: number, habilitado = true) {
   });
 }
 
+/** Avisos de cancelamento para a recepção (admin e recepção). Polling de 60 s. */
 export function useAvisosWhatsapp(filtros: { naoLidos?: boolean } = {}, habilitado = true) {
   return useQuery({
     queryKey: chavesWhatsapp.avisos(filtros),
@@ -142,7 +143,7 @@ export function useDesconectarWhatsapp() {
 export function useMarcarAvisoLido() {
   const invalidar = useInvalidarWhatsapp();
   return useMutation({
-    mutationFn: (id: string) => api.post<{ id: string; lido: true }>(`/whatsapp/avisos/${id}/lido`),
+    mutationFn: (id: string) => api.post<{ id: string; lido: true; lida_em: string }>(`/whatsapp/avisos/${id}/lido`),
     onSuccess: invalidar,
   });
 }

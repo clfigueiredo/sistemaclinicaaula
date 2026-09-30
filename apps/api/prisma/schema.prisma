@@ -249,7 +249,7 @@ model Assinatura {
 
 model Usuario {
   id              String       @id @default(uuid()) @db.Uuid
-  clinica_id      String       @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  clinica_id      String       @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
   nome            String
   email           String
   senha_hash      String
@@ -277,7 +277,7 @@ model Usuario {
 
 model Profissional {
   id                   String   @id @default(uuid()) @db.Uuid
-  clinica_id           String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  clinica_id           String   @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
   nome                 String
   especialidade        String?
   /// CRM, CRO, CRP… (texto livre)
@@ -305,7 +305,7 @@ model Profissional {
 /// Grade semanal de atendimento. dia_semana: 0 = domingo … 6 = sábado. Horas "HH:mm" (fuso da clínica).
 model ProfissionalHorario {
   id              String   @id @default(uuid()) @db.Uuid
-  clinica_id      String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  clinica_id      String   @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
   profissional_id String   @db.Uuid
   dia_semana      Int      @db.SmallInt
   hora_inicio     String   @db.VarChar(5)
@@ -323,7 +323,7 @@ model ProfissionalHorario {
 /// Bloqueio de agenda. profissional_id null = clínica toda (feriado, recesso…).
 model BloqueioAgenda {
   id              String   @id @default(uuid()) @db.Uuid
-  clinica_id      String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  clinica_id      String   @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
   profissional_id String?  @db.Uuid
   inicio          DateTime
   fim             DateTime
@@ -340,7 +340,7 @@ model BloqueioAgenda {
 
 model Convenio {
   id            String   @id @default(uuid()) @db.Uuid
-  clinica_id    String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  clinica_id    String   @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
   nome          String
   ativo         Boolean  @default(true)
   criado_em     DateTime @default(now())
@@ -357,7 +357,7 @@ model Convenio {
 
 model Paciente {
   id                 String    @id @default(uuid()) @db.Uuid
-  clinica_id         String    @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  clinica_id         String    @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
   nome               String
   /// Somente dígitos.
   cpf                String?
@@ -396,7 +396,7 @@ model Paciente {
 
 model PacienteAlergia {
   id          String   @id @default(uuid()) @db.Uuid
-  clinica_id  String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  clinica_id  String   @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
   paciente_id String   @db.Uuid
   descricao   String
   gravidade   String?
@@ -411,7 +411,7 @@ model PacienteAlergia {
 
 model PacienteMedicacao {
   id          String   @id @default(uuid()) @db.Uuid
-  clinica_id  String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  clinica_id  String   @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
   paciente_id String   @db.Uuid
   nome        String
   dosagem     String?
@@ -428,7 +428,7 @@ model PacienteMedicacao {
 
 model Agendamento {
   id                  String            @id @default(uuid()) @db.Uuid
-  clinica_id          String            @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  clinica_id          String            @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
   paciente_id         String            @db.Uuid
   profissional_id     String            @db.Uuid
   inicio              DateTime
@@ -437,6 +437,9 @@ model Agendamento {
   convenio_id         String?           @db.Uuid
   status              StatusAgendamento @default(agendado)
   observacoes         String?
+  /// Motivo informado no cancelamento (pela equipe ou pelo paciente via WhatsApp).
+  motivo_cancelamento String?
+  cancelado_em        DateTime?
   /// Usuário que criou o agendamento.
   criado_por          String?           @db.Uuid
   /// Preenchido pelo worker de lembretes (evita envio duplicado).
@@ -464,7 +467,7 @@ model Agendamento {
 /// Correção = novo registro, opcionalmente apontando para o corrigido em `corrige_registro_id`.
 model ProntuarioRegistro {
   id                  String   @id @default(uuid()) @db.Uuid
-  clinica_id          String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  clinica_id          String   @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
   paciente_id         String   @db.Uuid
   profissional_id     String?  @db.Uuid
   agendamento_id      String?  @db.Uuid
@@ -491,7 +494,7 @@ model ProntuarioRegistro {
 
 model Anexo {
   id           String   @id @default(uuid()) @db.Uuid
-  clinica_id   String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  clinica_id   String   @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
   paciente_id  String   @db.Uuid
   registro_id  String?  @db.Uuid
   nome_arquivo String
@@ -517,7 +520,7 @@ model Anexo {
 /// Uma sessão WPPConnect por clínica.
 model WhatsappSessao {
   id            String               @id @default(uuid()) @db.Uuid
-  clinica_id    String               @unique @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  clinica_id    String               @unique @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
   nome_sessao   String               @unique
   /// Token Bearer gerado pelo WPPConnect para a sessão.
   token         String?
@@ -533,7 +536,7 @@ model WhatsappSessao {
 
 model MensagemWhatsapp {
   id             String          @id @default(uuid()) @db.Uuid
-  clinica_id     String          @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  clinica_id     String          @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
   agendamento_id String?         @db.Uuid
   paciente_id    String?         @db.Uuid
   telefone       String
@@ -546,6 +549,8 @@ model MensagemWhatsapp {
   /// ID da mensagem no provedor (WPPConnect / Meta).
   id_externo     String?
   enviada_em     DateTime?
+  /// Avisos à recepção: quando foi marcado como lido (null = não lido).
+  lida_em        DateTime?
   criado_em      DateTime        @default(now())
 
   clinica     Clinica      @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
@@ -556,13 +561,15 @@ model MensagemWhatsapp {
   @@index([clinica_id, criado_em])
   @@index([clinica_id, direcao, status])
   @@index([clinica_id, telefone])
+  // Índice único parcial (clinica_id, id_externo) WHERE direcao='entrada' AND id_externo IS NOT NULL
+  // criado por SQL manual na migration ajustes_integracao (Prisma não suporta índice parcial).
   @@map("mensagens_whatsapp")
 }
 
 /// Log de acesso (LGPD). Gravado via logAcesso() em src/utils/logAcesso.ts.
 model LogAcesso {
   id          String   @id @default(uuid()) @db.Uuid
-  clinica_id  String   @default(dbgenerated("(current_setting('app.clinica_id'))::uuid")) @db.Uuid
+  clinica_id  String   @default(dbgenerated("(current_setting('app.clinica_id'::text))::uuid")) @db.Uuid
   usuario_id  String?  @db.Uuid
   acao        String
   entidade    String

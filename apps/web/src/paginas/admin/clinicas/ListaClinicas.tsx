@@ -1,6 +1,6 @@
 // Clínicas cadastradas: busca, filtros (status da assinatura, plano, situação) e paginação.
 import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Building2, ChevronLeft, ChevronRight, Loader2, Search, X } from 'lucide-react';
 import { useListaClinicasAdmin, type FiltrosClinicas } from '@/api/adminClinicas';
 import { useListaPlanos } from '@/api/adminPlanos';
@@ -168,7 +168,14 @@ export default function PaginaListaClinicas() {
                 {data.itens.map((c) => (
                   <TableRow key={c.id} className="cursor-pointer" onClick={() => navigate(`/admin/clinicas/${c.id}`)}>
                     <TableCell className="max-w-72 pl-4">
-                      <p className="truncate font-medium">{c.nome}</p>
+                      {/* Link acessível por teclado; a linha inteira continua clicável. */}
+                      <Link
+                        to={`/admin/clinicas/${c.id}`}
+                        className="block truncate font-medium hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {c.nome}
+                      </Link>
                       <p className="truncate text-xs text-muted-foreground">
                         {mascararCpfCnpj(c.documento)}
                         {c.cidade && ` · ${c.cidade}${c.uf ? `/${c.uf}` : ''}`}

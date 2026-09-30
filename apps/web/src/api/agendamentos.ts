@@ -21,6 +21,9 @@ export type Agendamento = {
   tipo: TipoAgendamento;
   status: StatusAgendamento;
   observacoes: string | null;
+  /** Preenchidos quando cancelado (pela equipe ou pelo paciente via WhatsApp). */
+  motivo_cancelamento: string | null;
+  cancelado_em: string | null;
   criado_por: string | null;
   lembrete_enviado_em: string | null;
   criado_em: string;

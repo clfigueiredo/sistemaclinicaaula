@@ -145,3 +145,18 @@
   --fc-neutral-bg-color: var(--muted);
   font-size: 0.875rem;
 }
+
+/* Título do FullCalendar: menor e sem quebrar em várias linhas no celular. */
+.fc .fc-toolbar-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+@media (max-width: 640px) {
+  .fc .fc-toolbar-title {
+    font-size: 1rem;
+    text-align: center;
+  }
+  .fc .fc-toolbar.fc-header-toolbar {
+    gap: 0.5rem;
+  }
+}

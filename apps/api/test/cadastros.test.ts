@@ -372,3 +372,28 @@ describe('usuários', () => {
     expect(senha.statusCode).toBe(204);
   });
 });
+
+describe('onboarding (GET /me/onboarding)', () => {
+  it('reflete profissional, grade, convênio e WhatsApp; só admin', async () => {
+    const { clinica, headers } = await novaClinica('Clínica Onboarding', 'grande');
+    const ver = async () => (await app.inject({ method: 'GET', url: '/me/onboarding', headers })).json();
+
+    expect(await ver()).toEqual({ profissional: false, horarios: false, convenios: false, whatsapp: false });
+
+    const p = (await app.inject({ method: 'POST', url: '/profissionais', headers, payload: { nome: 'Dr. Onboarding' } })).json();
+    expect(await ver()).toMatchObject({ profissional: true, horarios: false });
+
+    await app.inject({
+      method: 'PUT',
+      url: `/profissionais/${p.id}/horarios`,
+      headers,
+      payload: [{ dia_semana: 1, hora_inicio: '08:00', hora_fim: '12:00' }],
+    });
+    await app.inject({ method: 'POST', url: '/convenios', headers, payload: { nome: 'Convênio Onboarding' } });
+    expect(await ver()).toEqual({ profissional: true, horarios: true, convenios: true, whatsapp: false });
+
+    const recepcao = await criarUsuario(clinica.id, 'recepcao');
+    const r = await app.inject({ method: 'GET', url: '/me/onboarding', headers: cabecalho(clinica.id, recepcao.id, 'recepcao') });
+    expect(r.statusCode).toBe(403);
+  });
+});
