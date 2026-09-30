@@ -17,6 +17,8 @@ import { env } from '../config/env';
 
 const VERSAO = 'v1';
 const ALGORITMO = 'aes-256-gcm';
+const TAMANHO_IV = 12;
+const TAMANHO_TAG = 16;
 
 export class ErroCripto extends Error {
   constructor(mensagem: string) {
@@ -33,8 +35,8 @@ function chave(chaveHex?: string): Buffer {
 
 /** Cifra um texto. `chaveHex` só para testes/rotação; o padrão é a chave do ambiente. */
 export function criptografar(texto: string, chaveHex?: string): string {
-  const iv = randomBytes(12);
-  const cifra = createCipheriv(ALGORITMO, chave(chaveHex), iv);
+  const iv = randomBytes(TAMANHO_IV);
+  const cifra = createCipheriv(ALGORITMO, chave(chaveHex), iv, { authTagLength: TAMANHO_TAG });
   const dados = Buffer.concat([cifra.update(texto, 'utf8'), cifra.final()]);
   const tag = cifra.getAuthTag();
   return [VERSAO, iv.toString('base64'), tag.toString('base64'), dados.toString('base64')].join(':');
@@ -45,9 +47,15 @@ export function descriptografar(cifrado: string, chaveHex?: string): string {
   const partes = cifrado.split(':');
   if (partes.length !== 4 || partes[0] !== VERSAO) throw new ErroCripto('Formato de segredo cifrado inválido.');
   const [, ivB64, tagB64, dadosB64] = partes as [string, string, string, string];
+  const iv = Buffer.from(ivB64, 'base64');
+  const tag = Buffer.from(tagB64, 'base64');
+  // GCM aceitaria tags truncadas (4–16 bytes) — com tag curta a falsificação fica viável. Exige 16/12 bytes.
+  if (tag.length !== TAMANHO_TAG || iv.length !== TAMANHO_IV) {
+    throw new ErroCripto('Formato de segredo cifrado inválido.');
+  }
   try {
-    const decifra = createDecipheriv(ALGORITMO, chave(chaveHex), Buffer.from(ivB64, 'base64'));
-    decifra.setAuthTag(Buffer.from(tagB64, 'base64'));
+    const decifra = createDecipheriv(ALGORITMO, chave(chaveHex), iv, { authTagLength: TAMANHO_TAG });
+    decifra.setAuthTag(tag);
     return Buffer.concat([decifra.update(Buffer.from(dadosB64, 'base64')), decifra.final()]).toString('utf8');
   } catch {
     throw new ErroCripto('Não foi possível decifrar o segredo (chave diferente ou dado adulterado).');

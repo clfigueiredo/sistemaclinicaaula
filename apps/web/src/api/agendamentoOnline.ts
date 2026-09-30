@@ -125,6 +125,8 @@ export type ResultadoAprovacao = {
   paciente_id: string;
   paciente_criado: boolean;
   whatsapp: ResultadoWhatsapp;
+  /** Telefone da solicitação diferente do cadastro do paciente escolhido (confirmação não foi para ele). */
+  aviso: { codigo: 'telefone_divergente'; mensagem: string } | null;
 };
 
 export type ConfigAgendamentoOnline = {
@@ -152,6 +154,7 @@ export const ERROS_WHATSAPP: Record<string, string> = {
   recurso_indisponivel: 'o plano não inclui WhatsApp',
   limite_atingido: 'o limite de mensagens do plano foi atingido',
   fila_indisponivel: 'a fila de envio está indisponível',
+  telefone_divergente: 'o telefone da solicitação difere do cadastro do paciente',
 };
 
 export function descreverWhatsapp(w: ResultadoWhatsapp): string | null {

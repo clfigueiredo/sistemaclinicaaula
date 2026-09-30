@@ -549,3 +549,104 @@ describe('financeiro — repasses e relatórios', () => {
     expect((await req(A.recepcao, 'GET', `/financeiro/relatorios/exportar?tipo=fluxo`)).statusCode).toBe(403);
   });
 });
+
+// ----------------------------------------------------------------------------- segurança (auditoria fase 2)
+
+describe('financeiro — segurança (auditoria)', () => {
+  let C: Cenario;
+  let contaC: string;
+
+  beforeAll(async () => {
+    C = await criarClinica((await criarPlano(true)).id);
+    contaC = (await req(C.admin, 'GET', '/financeiro/contas')).json()[0].id;
+  });
+
+  it('M3: CSV escapa fórmulas em texto (= + - @ TAB CR) e mantém valores numéricos', async () => {
+    await prisma.paciente.update({ where: { id: C.paciente.id }, data: { nome: '+SOMA(1;2)' } });
+    for (const [tipo, descricao] of [
+      ['entrada', '=HYPERLINK("http://mal.teste","clique")'],
+      ['saida', '@SUM(1+1)'],
+      ['entrada', 'TAB_AQUI'],
+      ['entrada', '-2+3'],
+    ] as const) {
+      const r = await req(C.admin, 'POST', '/financeiro/movimentacoes', {
+        tipo,
+        data: HOJE,
+        valor: 30,
+        conta_financeira_id: contaC,
+        forma_pagamento: 'pix',
+        descricao,
+        paciente_id: C.paciente.id,
+      });
+      expect(r.statusCode, r.body).toBe(201);
+    }
+    // A API apara espaços/TAB do corpo; TAB inicial só chega por outro caminho (ex.: dado antigo).
+    await prisma.movimentacaoFinanceira.updateMany({
+      where: { clinica_id: C.clinica.id, descricao: 'TAB_AQUI' },
+      data: { descricao: '\tcmd' },
+    });
+    const csv = await req(C.admin, 'GET', `/financeiro/relatorios/exportar?tipo=movimentacoes&inicio=${INICIO_MES}&fim=${FIM_MES}`);
+    expect(csv.statusCode).toBe(200);
+    const corpo = csv.body;
+    expect(corpo).toContain(`"'=HYPERLINK(""http://mal.teste"",""clique"")"`);
+    expect(corpo).toContain(";'@SUM(1+1);");
+    expect(corpo).toContain(";'\tcmd;");
+    expect(corpo).toContain(";'-2+3;");
+    expect(corpo).toContain(`"'+SOMA(1;2)"`);
+    expect(corpo).toContain(';-30,00;'); // saída continua número
+    expect(corpo).not.toMatch(/;=HYPERLINK|;@SUM|;\+SOMA/);
+  });
+
+  it('M4: recepção não vê repasses (nem estorno de repasse) e não usa profissional_id', async () => {
+    const pag = await req(C.admin, 'POST', '/financeiro/repasses/pagamentos', {
+      profissional_id: C.prof1.id,
+      inicio: INICIO_MES,
+      fim: FIM_MES,
+      valor: 12.34,
+      data: HOJE,
+      conta_financeira_id: contaC,
+      forma_pagamento: 'pix',
+      descricao: 'Repasse sigiloso',
+    });
+    expect(pag.statusCode, pag.body).toBe(201);
+    const est = await req(C.admin, 'POST', `/financeiro/movimentacoes/${pag.json().id}/estorno`, { motivo: 'teste' });
+    expect(est.statusCode).toBe(201);
+
+    const url = `/financeiro/movimentacoes?inicio=${INICIO_MES}&fim=${FIM_MES}&por_pagina=100`;
+    const admin = (await req(C.admin, 'GET', url)).json();
+    expect(admin.itens.some((m: { origem: string }) => m.origem === 'repasse')).toBe(true);
+    const recep = await req(C.recepcao, 'GET', url);
+    expect(recep.statusCode).toBe(200);
+    const ids = recep.json().itens.map((m: { id: string }) => m.id);
+    expect(ids).not.toContain(pag.json().id);
+    expect(ids).not.toContain(est.json().id);
+    expect(recep.body).not.toContain('Repasse sigiloso');
+    expect(recep.json().total).toBe(admin.total - 2);
+
+    const filtroRepasse = await req(C.recepcao, 'GET', `${url}&origem=repasse`);
+    expect(filtroRepasse.statusCode).toBe(403);
+    const filtroProf = await req(C.recepcao, 'GET', `${url}&profissional_id=${C.prof1.id}`);
+    expect(filtroProf.statusCode).toBe(403);
+    expect((await req(C.admin, 'GET', `${url}&origem=repasse`)).statusCode).toBe(200);
+
+    const base = { tipo: 'entrada', data: HOJE, valor: 10, conta_financeira_id: contaC, forma_pagamento: 'dinheiro' };
+    const comProf = await req(C.recepcao, 'POST', '/financeiro/movimentacoes', { ...base, profissional_id: C.prof2.id });
+    expect(comProf.statusCode).toBe(403);
+    const pelaConsulta = await req(C.recepcao, 'POST', '/financeiro/movimentacoes', { ...base, agendamento_id: C.agendamento.id });
+    expect(pelaConsulta.statusCode, pelaConsulta.body).toBe(201);
+    expect(pelaConsulta.json().profissional?.id ?? pelaConsulta.json().profissional_id).toBe(C.prof1.id);
+  });
+
+  it('B8: GET de contas/categorias com assinatura inativa não cria nada', async () => {
+    const D = await criarClinica((await criarPlano(true)).id);
+    await prisma.assinatura.update({ where: { clinica_id: D.clinica.id }, data: { status: 'vencida' } });
+    const contas = await req(D.admin, 'GET', '/financeiro/contas');
+    expect(contas.statusCode).toBe(200);
+    expect(contas.json()).toEqual([]);
+    const cats = await req(D.recepcao, 'GET', '/financeiro/categorias');
+    expect(cats.statusCode).toBe(200);
+    expect(cats.json()).toEqual([]);
+    expect(await prisma.contaFinanceira.count({ where: { clinica_id: D.clinica.id } })).toBe(0);
+    expect(await prisma.categoriaFinanceira.count({ where: { clinica_id: D.clinica.id } })).toBe(0);
+  });
+});

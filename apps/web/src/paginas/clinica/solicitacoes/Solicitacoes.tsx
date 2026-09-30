@@ -303,6 +303,7 @@ function DialogoAprovar({ solicitacao, aoFechar }: { solicitacao: Solicitacao; a
       toast.success(r.paciente_criado ? 'Agendamento criado e paciente cadastrado.' : 'Agendamento criado.', {
         description: w ?? 'O paciente não autorizou WhatsApp: avise-o por outro meio.',
       });
+      if (r.aviso) toast.warning('Telefone da solicitação difere do cadastro', { description: r.aviso.mensagem, duration: 12_000 });
       aoFechar();
     } catch (e) {
       if (e instanceof ErroApi && ['horario_ocupado', 'horario_bloqueado', 'fora_da_grade', 'horario_passado'].includes(e.codigo)) {
@@ -406,7 +407,14 @@ function DialogoAprovar({ solicitacao, aoFechar }: { solicitacao: Solicitacao; a
             </div>
 
             <p className="flex items-start gap-2 rounded-md bg-muted/60 p-3 text-xs text-muted-foreground">
-              {solicitacao.aceita_whatsapp ? (
+              {selecionado !== NOVO ? (
+                <>
+                  <MessageCircle className="mt-0.5 size-4 shrink-0" />
+                  Paciente já cadastrado: a confirmação vai para o WhatsApp do cadastro (se ele autorizou) ou para o
+                  telefone da solicitação só se for o mesmo do cadastro. Se o telefone da solicitação for diferente,
+                  você será avisado para confirmar por outro meio.
+                </>
+              ) : solicitacao.aceita_whatsapp ? (
                 <>
                   <MessageCircle className="mt-0.5 size-4 shrink-0 text-success" />O paciente receberá a confirmação pelo
                   WhatsApp.

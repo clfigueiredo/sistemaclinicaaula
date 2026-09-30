@@ -199,12 +199,25 @@ async function montarFluxo(
 
 // ----------------------------------------------------------------------------- CSV
 
+/** Valor numérico já formatado (pt-BR) — sai como número, sem o escape de fórmula aplicado aos textos. */
+class NumeroCsv {
+  constructor(readonly valor: string) {}
+}
+
+/**
+ * Célula CSV. TEXTO que começa com = + - @ TAB ou CR recebe o prefixo ' (evita injeção de fórmula ao abrir no
+ * Excel/LibreOffice — "CSV injection": nome de paciente, descrição, categoria… são digitados por usuários).
+ * Números (`number` ou `NumeroCsv`) saem como estão (ex.: "-150,00" continua número).
+ */
 function celula(v: unknown): string {
-  const s = v === null || v === undefined ? '' : String(v);
+  if (v instanceof NumeroCsv) return v.valor;
+  if (typeof v === 'number') return String(v);
+  let s = v === null || v === undefined ? '' : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 function numeroBr(v: string) {
-  return v.replace('.', ',');
+  return new NumeroCsv(v.replace('.', ','));
 }
 function dataBr(iso: string) {
   return iso.length === 10 ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : `${iso.slice(5, 7)}/${iso.slice(0, 4)}`;

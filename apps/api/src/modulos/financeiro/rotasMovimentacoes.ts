@@ -7,6 +7,9 @@
  *   - Estorno (só admin) = nova movimentação inversa com `estorno_de_id` (uma vez; estorno não se estorna).
  *     Se a original baixou um título, o título volta a `aberto`.
  *   - Datas de lançamento não podem ser futuras (caixa é realizado; o futuro é título).
+ *   - Recepção não vê repasses: `origem=repasse` ⇒ 403 e a lista exclui repasses (e estornos de repasse); não
+ *     filtra nem lança com `profissional_id` (403) — o profissional só entra pelo agendamento (`agendamento_id` /
+ *     `/recebimentos`), onde vem do próprio agendamento.
  */
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import type { Prisma } from '@prisma/client';
@@ -49,6 +52,19 @@ import {
 import { WHERE_MOVIMENTACAO_EFETIVA } from '../../servicos/financeiroComum';
 
 const ORIGENS = ['manual', 'consulta', 'titulo', 'repasse', 'estorno'] as const;
+
+/** Movimentações que a recepção não pode ver: pagamentos de repasse e os estornos deles. */
+export const WHERE_SEM_REPASSE: Prisma.MovimentacaoFinanceiraWhereInput = {
+  NOT: { OR: [{ origem: 'repasse' }, { estorno_de: { is: { origem: 'repasse' } } }] },
+};
+
+function erroRecepcaoProfissional() {
+  return new ErroNegocio(
+    403,
+    'proibido',
+    'A recepção não vincula nem filtra por profissional aqui: registre o recebimento pela consulta (o profissional vem do agendamento).',
+  );
+}
 
 async function carregarAgendamento(db: DbTenant, id: string) {
   const a = ou404(
@@ -102,9 +118,15 @@ const rotas: FastifyPluginAsyncZod = async (app) => {
     },
     async (request) => {
       const q = request.query;
+      const recepcao = request.usuarioClinica!.papel !== 'admin';
+      if (recepcao && q.origem === 'repasse') {
+        throw new ErroNegocio(403, 'proibido', 'A recepção não tem acesso aos repasses de profissionais.');
+      }
+      if (recepcao && q.profissional_id) throw erroRecepcaoProfissional();
       const fuso = await fusoDaClinica(request.db, request.clinicaId);
       const periodo = resolverPeriodo(q, fuso);
       const base: Prisma.MovimentacaoFinanceiraWhereInput = {
+        ...(recepcao ? WHERE_SEM_REPASSE : {}),
         data: { gte: dataSemHora(periodo.inicio), lte: dataSemHora(periodo.fim) },
         ...(q.conta_id ? { conta_financeira_id: q.conta_id } : {}),
         ...(q.origem ? { origem: q.origem } : {}),
@@ -171,6 +193,7 @@ const rotas: FastifyPluginAsyncZod = async (app) => {
     async (request, reply) => {
       const b = request.body;
       const db = request.db;
+      if (request.usuarioClinica!.papel !== 'admin' && b.profissional_id) throw erroRecepcaoProfissional();
       const fuso = await fusoDaClinica(db, request.clinicaId);
       assegurarNaoFutura(b.data, fuso);
       await validarConta(db, b.conta_financeira_id);

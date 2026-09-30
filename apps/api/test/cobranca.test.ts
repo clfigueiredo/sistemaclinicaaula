@@ -647,3 +647,203 @@ describe('faturas da clínica', () => {
     expect(lista.json().itens[0]).not.toHaveProperty('payload');
   });
 });
+
+// ----------------------------------------------------------------------------- segurança (auditoria fase 2)
+
+function webhookAsaas(idEvento: string, evento: string, idPagamento: string) {
+  return app.inject({
+    method: 'POST',
+    url: '/webhooks/pagamentos/asaas',
+    headers: { 'content-type': 'application/json', 'asaas-access-token': TOKEN_WEBHOOK_ASAAS },
+    payload: JSON.stringify({
+      id: `${idEvento}_${sufixo}`,
+      event: evento,
+      payment: { id: idPagamento, status: evento === 'PAYMENT_RECEIVED' ? 'RECEIVED' : 'REFUNDED', value: 199.9, paymentDate: hojeIso() },
+    }),
+  });
+}
+
+describe('estorno/chargeback (M2)', () => {
+  it('estorno de cobrança paga recalcula expira_em pelo último ciclo pago; sem nenhuma paga ⇒ vencida', async () => {
+    await configurarAsaas(); // tolerância 5
+    const { clinica, assinatura } = await criarClinica();
+    const hoje = hojeIso();
+    const v1 = somarDias(hoje, -10);
+    const v2 = somarDias(hoje, 20);
+    const c1 = await criarCobrancaDireta(clinica.id, assinatura.id, { id_externo: `pay_${sufixo}_m2a`, vencimento: dataSemHora(v1) });
+    const c2 = await criarCobrancaDireta(clinica.id, assinatura.id, { id_externo: `pay_${sufixo}_m2b`, vencimento: dataSemHora(v2) });
+    expect((await webhookAsaas('evt_m2_p1', 'PAYMENT_RECEIVED', c1.id_externo!)).json()).toEqual({ ok: true });
+    expect((await webhookAsaas('evt_m2_p2', 'PAYMENT_RECEIVED', c2.id_externo!)).json()).toEqual({ ok: true });
+    const antes = await prisma.assinatura.findUniqueOrThrow({ where: { id: assinatura.id } });
+    expect(antes.expira_em!.toISOString().slice(0, 10) >= somarDias(somarMeses(v2, 1), 5)).toBe(true);
+
+    // chargeback da cobrança mais recente: volta ao fim do ciclo de c1 (ainda no futuro) e continua ativa
+    const r = await webhookAsaas('evt_m2_e2', 'PAYMENT_CHARGEBACK_REQUESTED', c2.id_externo!);
+    expect(r.statusCode).toBe(200);
+    expect(r.json().aviso).toMatch(/Estorno/);
+    const depois = await prisma.assinatura.findUniqueOrThrow({ where: { id: assinatura.id } });
+    expect((await prisma.cobranca.findUniqueOrThrow({ where: { id: c2.id } })).status).toBe('estornada');
+    expect(depois.status).toBe('ativa');
+    expect(depois.expira_em!.getTime()).toBeLessThan(antes.expira_em!.getTime());
+    const fimC1 = somarDias(somarMeses(v1, 1), 5);
+    expect(depois.expira_em!.toISOString().slice(0, 10) <= somarDias(fimC1, 1)).toBe(true);
+
+    // estorno da última paga: nenhuma cobrança paga ⇒ vencida
+    await webhookAsaas('evt_m2_e1', 'PAYMENT_REFUNDED', c1.id_externo!);
+    const final = await prisma.assinatura.findUniqueOrThrow({ where: { id: assinatura.id } });
+    expect(final.status).toBe('vencida');
+    expect(final.expira_em).toBeNull();
+  });
+
+  it('job diário: estornada conta como dívida na tolerância; cancelar a estornada (perdão) é só local', async () => {
+    await configurarAsaas(); // tolerância 5
+    const fake = criarFake();
+    definirFabricaGateway(fake.fabrica);
+    const { clinica, assinatura } = await criarClinica();
+    const estornada = await criarCobrancaDireta(clinica.id, assinatura.id, {
+      vencimento: dataSemHora(somarDias(hojeIso(), -6)),
+      status: 'estornada',
+      id_externo: `pay_${sufixo}_m2job`,
+    });
+    await executarJobCobrancas(hojeIso(), SILENCIO);
+    expect((await prisma.assinatura.findUniqueOrThrow({ where: { id: assinatura.id } })).status).toBe('vencida');
+
+    const cancelar = await comoAdmin('POST', `/admin/cobranca/cobrancas/${estornada.id}/cancelar`);
+    expect(cancelar.statusCode).toBe(200);
+    expect(cancelar.json().status).toBe('cancelada');
+    expect(fake.estado.cancelamentos).toBe(0); // não chama o gateway
+  });
+});
+
+describe('pagamento de cobrança antiga/cancelada (B2)', () => {
+  it('pagar cobrança cancelada não reativa (evento com aviso)', async () => {
+    await configurarAsaas();
+    const { clinica, assinatura } = await criarClinica();
+    await prisma.assinatura.update({ where: { id: assinatura.id }, data: { status: 'vencida' } });
+    const c = await criarCobrancaDireta(clinica.id, assinatura.id, { id_externo: `pay_${sufixo}_b2c`, status: 'cancelada' });
+    const r = await webhookAsaas('evt_b2_c', 'PAYMENT_RECEIVED', c.id_externo!);
+    expect(r.statusCode).toBe(200);
+    expect(r.json().aviso).toMatch(/CANCELADA/);
+    expect((await prisma.assinatura.findUniqueOrThrow({ where: { id: assinatura.id } })).status).toBe('vencida');
+    expect((await prisma.cobranca.findUniqueOrThrow({ where: { id: c.id } })).status).toBe('cancelada');
+    const evento = await prisma.eventoGateway.findFirstOrThrow({ where: { gateway: 'asaas', id_evento: `evt_b2_c_${sufixo}` } });
+    expect(evento.erro).toMatch(/CANCELADA/);
+    expect(evento.processado_em).not.toBeNull();
+  });
+
+  it('pagar ciclo antigo com outra cobrança em dívida além da tolerância: não reativa e expira_em não vai para o passado', async () => {
+    await configurarAsaas(); // tolerância 5
+    const { clinica, assinatura } = await criarClinica();
+    await prisma.assinatura.update({ where: { id: assinatura.id }, data: { status: 'vencida', expira_em: null } });
+    const hoje = hojeIso();
+    const antiga = await criarCobrancaDireta(clinica.id, assinatura.id, {
+      id_externo: `pay_${sufixo}_b2a`,
+      vencimento: dataSemHora(somarDias(hoje, -70)),
+      status: 'vencida',
+    });
+    const recente = await criarCobrancaDireta(clinica.id, assinatura.id, {
+      id_externo: `pay_${sufixo}_b2r`,
+      vencimento: dataSemHora(somarDias(hoje, -20)),
+      status: 'vencida',
+    });
+    const r = await webhookAsaas('evt_b2_a', 'PAYMENT_RECEIVED', antiga.id_externo!);
+    expect(r.json().aviso).toMatch(/outra cobrança em aberto/);
+    let a = await prisma.assinatura.findUniqueOrThrow({ where: { id: assinatura.id } });
+    expect(a.status).toBe('vencida');
+    expect(a.expira_em).toBeNull(); // fim do ciclo antigo já passou: não grava no passado
+
+    // pagando a que faltava, reativa e avança
+    const r2 = await webhookAsaas('evt_b2_r', 'PAYMENT_RECEIVED', recente.id_externo!);
+    expect(r2.json()).toEqual({ ok: true });
+    a = await prisma.assinatura.findUniqueOrThrow({ where: { id: assinatura.id } });
+    expect(a.status).toBe('ativa');
+    expect(a.expira_em!.getTime()).toBeGreaterThan(Date.now());
+  });
+});
+
+describe('ambiente da cobrança (B3)', () => {
+  it('cobrança grava o ambiente; pagamento de cobrança sandbox com gateway em produção é ignorado', async () => {
+    await configurarAsaas({ ambiente: 'sandbox' });
+    await comoAdmin('POST', '/admin/cobranca/gateways/asaas/ativar');
+    const fake = criarFake();
+    fake.estado.cobrancas = 300;
+    definirFabricaGateway(fake.fabrica);
+    const { clinica, assinatura } = await criarClinica();
+    const gerada = await comoAdmin('POST', `/admin/cobranca/clinicas/${clinica.id}/cobrancas`, { vencimento: somarDias(hojeIso(), 3) });
+    expect(gerada.statusCode, gerada.body).toBe(201);
+    expect(gerada.json().ambiente).toBe('sandbox');
+    definirFabricaGateway(null);
+
+    await configurarAsaas({ ambiente: 'producao' });
+    await prisma.assinatura.update({ where: { id: assinatura.id }, data: { status: 'vencida' } });
+    const r = await webhookAsaas('evt_b3', 'PAYMENT_RECEIVED', gerada.json().id_externo);
+    expect(r.statusCode).toBe(200);
+    expect(r.json().aviso).toMatch(/SANDBOX/);
+    expect((await prisma.cobranca.findUniqueOrThrow({ where: { id: gerada.json().id } })).status).toBe('pendente');
+    expect((await prisma.assinatura.findUniqueOrThrow({ where: { id: assinatura.id } })).status).toBe('vencida');
+
+    // cobrança de produção paga normalmente
+    const prod = await criarCobrancaDireta(clinica.id, assinatura.id, { id_externo: `pay_${sufixo}_b3p`, ambiente: 'producao' });
+    expect((await webhookAsaas('evt_b3p', 'PAYMENT_RECEIVED', prod.id_externo!)).json()).toEqual({ ok: true });
+  });
+
+  it('ativar gateway em sandbox com clínicas em cobrança automática ⇒ aviso (sem bloquear)', async () => {
+    await configurarAsaas({ ambiente: 'sandbox' });
+    const { assinatura } = await criarClinica();
+    await prisma.assinatura.update({ where: { id: assinatura.id }, data: { gateway: 'asaas', dia_vencimento: 10 } });
+    const r = await comoAdmin('POST', '/admin/cobranca/gateways/asaas/ativar');
+    expect(r.statusCode).toBe(200);
+    expect(r.json().ativo).toBe(true);
+    expect(r.json().aviso).toMatch(/SANDBOX/);
+
+    await configurarAsaas({ ambiente: 'producao' });
+    const r2 = await comoAdmin('POST', '/admin/cobranca/gateways/asaas/ativar');
+    expect(r2.json().aviso).toBeNull();
+  });
+});
+
+describe('Mercado Pago: cliente por clínica (B4)', () => {
+  it('não reaproveita cliente de mesmo e-mail de outra clínica; reaproveita o da própria clínica', async () => {
+    const { criarAdaptadorMercadoPago, descricaoCliente } = await import('../src/servicos/pagamentos/mercadoPagoAdapter');
+    const gw = criarAdaptadorMercadoPago({
+      provedor: 'mercado_pago',
+      ambiente: 'sandbox',
+      credenciais: { provedor: 'mercado_pago', access_token: TOKEN_MP },
+      segredoWebhook: SEGREDO_MP,
+      metodos: ['pix'],
+      diasTolerancia: 5,
+      opcoes: { dia_vencimento_padrao: 10, descricao_cobranca: 'x' },
+    } as unknown as Parameters<typeof criarAdaptadorMercadoPago>[0]);
+    const clinicaA = randomUUID();
+    const clinicaB = randomUUID();
+    const { chamadas } = mockarFetch([
+      [/^GET .*\/v1\/customers\/search/, () => ({ corpo: { results: [{ id: 'cus_da_A', description: descricaoCliente(clinicaA) }] } })],
+      [/^POST .*\/v1\/customers$/, () => ({ status: 201, corpo: { id: 'cus_novo_B' } })],
+    ]);
+    const dados = { nome: 'Clínica', documento: '11222333000181', email: 'mesmo@email.teste' };
+    expect(await gw.criarCliente({ ...dados, clinicaId: clinicaB })).toEqual({ clienteExternoId: 'cus_novo_B' });
+    const criado = chamadas.find((c) => c.metodo === 'POST');
+    expect(JSON.parse(String(criado!.init!.body)).description).toBe(descricaoCliente(clinicaB));
+    expect(await gw.criarCliente({ ...dados, clinicaId: clinicaA })).toEqual({ clienteExternoId: 'cus_da_A' });
+  });
+
+  it('usa o cliente_externo_id guardado na assinatura (sem buscar por e-mail)', async () => {
+    const cfg = await comoAdmin('PUT', '/admin/cobranca/gateways/mercado_pago', {
+      ambiente: 'sandbox',
+      credenciais: { access_token: TOKEN_MP },
+      segredo_webhook: SEGREDO_MP,
+    });
+    expect(cfg.statusCode).toBe(200);
+    await comoAdmin('POST', '/admin/cobranca/gateways/mercado_pago/ativar');
+    const { clinica, assinatura } = await criarClinica();
+    await prisma.assinatura.update({ where: { id: assinatura.id }, data: { gateway: 'mercado_pago', cliente_externo_id: 'cus_guardado' } });
+    const { chamadas } = mockarFetch([
+      [/^GET .*\/v1\/customers\/cus_guardado$/, () => ({ corpo: { id: 'cus_guardado', email: 'x@y.teste' } })],
+      [/^POST .*\/checkout\/preferences$/, () => ({ status: 201, corpo: { id: `pref_${sufixo}_b4`, init_point: 'https://mp/pagar' } })],
+    ]);
+    const r = await comoAdmin('POST', `/admin/cobranca/clinicas/${clinica.id}/cobrancas`, { vencimento: somarDias(hojeIso(), 3) });
+    expect(r.statusCode, r.body).toBe(201);
+    expect(chamadas.some((c) => c.url.includes('/v1/customers/search'))).toBe(false);
+    await comoAdmin('POST', '/admin/cobranca/gateways/mercado_pago/desativar');
+  });
+});

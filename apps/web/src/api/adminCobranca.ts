@@ -77,6 +77,8 @@ export type Cobranca = {
   /** 'YYYY-MM-DD' */
   vencimento: string;
   status: StatusCobranca;
+  /** Ambiente do gateway quando foi gerada (null = cobrança antiga). */
+  ambiente: AmbienteGateway | null;
   metodo: MetodoCobranca | null;
   link_pagamento: string | null;
   pago_em: string | null;
@@ -164,7 +166,9 @@ export function useSalvarGateway(provedor: ProvedorPagamento) {
 export function useAtivarGateway() {
   const apos = useAposAlterarGateway();
   return useMutation({
-    mutationFn: (provedor: ProvedorPagamento) => api.post<GatewayConfigurado>(`/admin/cobranca/gateways/${provedor}/ativar`),
+    mutationFn: (provedor: ProvedorPagamento) =>
+      // `aviso`: gateway em sandbox com clínicas em cobrança automática (não bloqueia).
+      api.post<GatewayConfigurado & { aviso: string | null }>(`/admin/cobranca/gateways/${provedor}/ativar`),
     onSuccess: apos,
   });
 }

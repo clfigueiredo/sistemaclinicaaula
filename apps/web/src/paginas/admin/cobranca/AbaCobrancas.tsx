@@ -304,7 +304,7 @@ export default function AbaCobrancas() {
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
                             variant="destructive"
-                            disabled={!['pendente', 'vencida'].includes(c.status)}
+                            disabled={!['pendente', 'vencida', 'estornada'].includes(c.status)}
                             onSelect={() => setCancelando(c)}
                           >
                             <Ban /> Cancelar cobrança
@@ -350,7 +350,9 @@ export default function AbaCobrancas() {
         aoMudar={(v) => !v && setCancelando(null)}
         titulo="Cancelar cobrança?"
         descricao={
-          cancelando
+          cancelando?.status === 'estornada'
+            ? `A cobrança estornada de ${formatarMoeda(cancelando.valor)} de ${cancelando.clinica.nome} deixa de contar como dívida (perdão do estorno/chargeback). Nada é enviado ao gateway.`
+            : cancelando
             ? `A cobrança de ${formatarMoeda(cancelando.valor)} de ${cancelando.clinica.nome} (vencimento ${formatarData(cancelando.vencimento)}) será cancelada também no ${ROTULOS_PROVEDOR_PAGAMENTO[cancelando.gateway]}. O link deixa de funcionar e a cobrança automática não gera outra para o mesmo mês.`
             : undefined
         }

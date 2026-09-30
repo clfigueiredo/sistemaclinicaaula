@@ -8,6 +8,7 @@ import { env } from './config/env';
 import { pluginErros } from './plugins/erros';
 import { pluginAuth } from './plugins/auth';
 import { registrarModulos } from './modulos';
+import { chaveIp } from './utils/ip';
 
 export type OpcoesApp = { logger?: FastifyServerOptions['logger'] };
 
@@ -68,7 +69,8 @@ export async function buildApp(opcoes: OpcoesApp = {}) {
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
   // global: false → só rotas com `config: { rateLimit: {...} }` são limitadas (ex.: login).
-  await app.register(rateLimit, { global: false });
+  // Chave: IPv4 inteiro ou prefixo /64 do IPv6 (trocar de endereço dentro do /64 não escapa do limite).
+  await app.register(rateLimit, { global: false, keyGenerator: (req) => chaveIp(req.ip) });
   await app.register(multipart, {
     limits: { fileSize: env.UPLOAD_MAX_MB * 1024 * 1024, files: 5 },
   });

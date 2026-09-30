@@ -1,6 +1,9 @@
 /**
  * Cadastros financeiros: contas (saldo atual calculado), categorias (padrão sob demanda) e
  * percentual de repasse dos profissionais.
+ *
+ * GET nunca grava com a assinatura inativa (somente leitura): a conta "Caixa" e as categorias padrão só são
+ * criadas sob demanda quando a clínica pode escrever; senão a lista sai como está (vazia, se nada existir).
  */
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import type { Prisma } from '@prisma/client';
@@ -77,7 +80,7 @@ const rotas: FastifyPluginAsyncZod = async (app) => {
     '/contas',
     { preHandler: exigirPapel('admin', 'recepcao'), schema: { querystring: z.object({ ativos: zAtivosQuery }) } },
     async (request) => {
-      await garantirContaPadrao(request.db);
+      if (!request.assinatura?.somenteLeitura) await garantirContaPadrao(request.db);
       const [contas, saldos] = await Promise.all([
         request.db.contaFinanceira.findMany({
           where: request.query.ativos !== undefined ? { ativo: request.query.ativos } : {},
@@ -164,7 +167,7 @@ const rotas: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (request) => {
-      await garantirCategoriasPadrao(request.db);
+      if (!request.assinatura?.somenteLeitura) await garantirCategoriasPadrao(request.db);
       const { tipo, ativos } = request.query;
       return request.db.categoriaFinanceira.findMany({
         where: { ...(tipo ? { tipo } : {}), ...(ativos !== undefined ? { ativo: ativos } : {}) },

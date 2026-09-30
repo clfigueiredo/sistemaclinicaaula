@@ -108,6 +108,15 @@ Sistema_Clinica/
 - Mesmo profissional em duas clínicas = **dois cadastros independentes**.
 - Cada clínica conecta **o próprio número** de WhatsApp (uma sessão WPPConnect por clínica).
 - Lembrete enviado **1 dia antes**; resposta `1` confirma, `2` cancela e avisa a recepção.
+- **Agendamento online — anti-abuso:** além do limite por telefone (configurável), máx. 3 solicitações pendentes
+  futuras por IP (IPv6 por /64, `utils/ip.ts` — mesma chave do rate limit) e 10 por profissional/dia; contagens sob
+  advisory lock. **Confirmação da aprovação:** paciente existente recebe no WhatsApp do cadastro; o telefone da
+  solicitação só recebe se for o mesmo do cadastro (com o nome informado na solicitação); senão, aviso
+  `telefone_divergente` à recepção.
+- **Cobrança do SaaS:** estorno/chargeback de cobrança paga recalcula `expira_em` pelo último ciclo pago (sem
+  nenhum ⇒ assinatura `vencida`) e `estornada` conta como dívida na tolerância até o super admin cancelá-la;
+  pagar cobrança cancelada não reativa; `cobrancas.ambiente` guarda sandbox/produção e pagamento de cobrança
+  sandbox com gateway em produção é ignorado. Detalhes em `docs/FASE2.md` §12.
 
 ## Comandos
 
@@ -277,7 +286,9 @@ await request.db.$transaction(async (tx) => {
   `z.coerce` em querystring; `z.uuid()` em ids; mensagens de validação em pt-BR.
 - Prisma P2002 ⇒ 409 `registro_duplicado`; P2025 ⇒ 404; P2003 ⇒ 409 `registro_vinculado` (automático).
 - LGPD: `await logAcesso(request, 'visualizar' | 'criar' | 'baixar', 'prontuario', id)` ao ver/criar
-  prontuário e baixar anexos (`src/utils/logAcesso.ts`).
+  prontuário e baixar anexos (`src/utils/logAcesso.ts`). Prévia de documento clínico: ação `previa`.
+- CSV: células de texto começando com `= + - @`/TAB/CR recebem `'` (anti CSV injection) — ver `celula` em
+  `modulos/financeiro/rotasRelatorios.ts`; números saem como número.
 - Uploads: `@fastify/multipart` já registrado (`await request.file()`, limite `UPLOAD_MAX_MB`); salve
   em `env.UPLOAD_DIR_ABS/<clinicaId>/...` e grave o caminho relativo em `anexos.caminho`. Nunca sirva a
   pasta como estática — download só por rota autenticada.
@@ -404,3 +415,8 @@ await request.db.$transaction(async (tx) => {
       faturas em Configurações, bloco de cobrança no detalhe da clínica, agenda pré-preenchida por URL, retorno
       marcado como agendado na criação do agendamento, QA E2E dos fluxos novos (`apps/web/e2e/smoke/05-*` a `08-*`)
 - [ ] Pendente: testar a cobrança com um gateway real em sandbox + túnel (passo a passo em `docs/SETUP_LOCAL.md`)
+- [x] Correções de segurança da auditoria da fase 2 (migration `seguranca_fase2`): anti-abuso do agendamento
+      online (IP//64, teto por profissional/dia, advisory locks), envio da confirmação online, estorno/chargeback,
+      pagamento de cobrança cancelada/antiga, ambiente da cobrança, cliente do Mercado Pago por clínica, tag do
+      AES-GCM, CSV injection, recepção sem repasses, log da prévia de documento, retorno só com agendamento do mesmo
+      profissional, GETs do financeiro sem gravar em somente leitura — resumo em `docs/FASE2.md` §12

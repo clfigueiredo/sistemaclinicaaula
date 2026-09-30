@@ -9,7 +9,7 @@
  *   GET  /documentos/:id                     documento completo                                  log `visualizar`
  *   POST /documentos                         { paciente_id, tipo, conteudo?, titulo?, agendamento_id?, metadados? }
  *                                            201 documento                                        log `criar`
- *   POST /documentos/previa                  mesmo corpo do POST ⇒ PDF de pré-visualização (NADA é gravado)
+ *   POST /documentos/previa                  mesmo corpo do POST ⇒ PDF de pré-visualização (NADA é gravado)  log `previa` (id = paciente)
  *   GET  /documentos/:id/pdf                 application/pdf inline, gerado sob demanda           log `baixar`
  *   Sem PUT/DELETE (404). Correção = novo documento.
  *
@@ -247,6 +247,9 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
 
   app.post('/previa', { schema: { body: CorpoDocumento } }, async (request, reply) => {
     const p = await prepararDocumento(request, request.body);
+    // LGPD: a prévia expõe dados clínicos do paciente (nada é gravado, mas o acesso é registrado).
+    // Sem documento ainda: entidade_id = paciente.
+    await logAcesso(request, 'previa', ENTIDADE_LOG, p.pacienteId);
     return enviarPdf(
       request,
       reply,

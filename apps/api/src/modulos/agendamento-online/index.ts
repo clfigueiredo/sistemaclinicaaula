@@ -28,12 +28,17 @@
  *   - Aprovação sem `paciente_id`: se já existe paciente com o MESMO CPF, ele é usado (CPF é único por clínica);
  *     senão cria um paciente novo com os dados + consentimento da solicitação. Casamento por telefone é só
  *     sugestão (`pacientes_candidatos`) — familiares costumam dividir o número.
- *   - WhatsApp de confirmação/recusa só se a SOLICITAÇÃO tiver `aceita_whatsapp` (consentimento dado no formulário
- *     para receber a resposta), para o telefone informado. Aprovação: se o paciente tem `aceita_whatsapp`, vai
- *     pelo paciente; senão sem paciente com `consentimentoExterno` (não altera o cadastro).
- *   - Anti-abuso: rate limit por IP, honeypot `website` (201 falso, nada gravado), máx.
- *     `ao_max_pendentes_por_telefone` pendentes por telefone (409 `limite_solicitacoes`), grava ip/user_agent,
- *     horário revalidado no servidor sob a trava da agenda (409 `horario_indisponivel`).
+ *   - WhatsApp de recusa só se a SOLICITAÇÃO tiver `aceita_whatsapp`, para o telefone informado (nome informado).
+ *     Confirmação da aprovação: paciente criado agora ⇒ telefone da solicitação (com o consentimento dela);
+ *     paciente EXISTENTE ⇒ WhatsApp do cadastro se ele `aceita_whatsapp`; senão o telefone da solicitação só se
+ *     for o mesmo do cadastro (nome da solicitação, `consentimentoExterno`). Telefone diferente ⇒ não envia para
+ *     ele e a resposta traz `aviso: { codigo: 'telefone_divergente', mensagem }` para a recepção.
+ *   - Anti-abuso: rate limit por IP (IPv6 por prefixo /64 — `utils/ip.ts`), honeypot `website` (201 falso, nada
+ *     gravado), máx. `ao_max_pendentes_por_telefone` pendentes por telefone e `MAX_PENDENTES_POR_IP` (3) pendentes
+ *     futuras por IP//64 (409 `limite_solicitacoes`, contagens sob advisory lock `clinica:telefone` e
+ *     `clinica:ip`), teto `MAX_PENDENTES_PROFISSIONAL_DIA` (10) pendentes futuras por profissional/dia
+ *     (409 `limite_solicitacoes_dia`), grava ip/user_agent, horário revalidado no servidor sob a trava da agenda
+ *     (409 `horario_indisponivel`).
  *   - Worker: workers/solicitacoesAgendamento.ts expira pendentes cujo horário passou.
  */
 import type { FastifyPluginAsyncZod, ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -56,7 +61,18 @@ import { normalizarTelefone, variantesTelefone } from '../../servicos/whatsapp/t
 import { somenteDigitos, validarCpf } from '../../utils/documento';
 import { ErroNegocio, erros, ou404 } from '../../utils/erros';
 import { obterFuso, travarAgendaProfissional, validarHorario } from '../agendamentos/servico';
-import { hojeNoFuso, horariosPublicos, profissionaisPublicos, resolverClinicaPublica } from './servico';
+import { chaveIp } from '../../utils/ip';
+import {
+  MAX_PENDENTES_POR_IP,
+  MAX_PENDENTES_PROFISSIONAL_DIA,
+  contarPendentesPorIp,
+  contarPendentesProfissionalDia,
+  hojeNoFuso,
+  horariosPublicos,
+  profissionaisPublicos,
+  resolverClinicaPublica,
+  travarChaveSolicitacao,
+} from './servico';
 
 export const prefixo = '';
 
@@ -250,6 +266,7 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
         const telefone = normalizarTelefone(b.telefone);
         if (!telefone) throw erros.invalido('Informe um número de WhatsApp válido, com DDD.', 'telefone_invalido');
         const dia = hojeNoFuso(fuso, b.inicio);
+        const ipChave = chaveIp(request.ip);
 
         const criada = await db.$transaction(async (tx) => {
           await travarAgendaProfissional(tx, clinica.id, prof.id);
@@ -268,6 +285,19 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
               'Este horário não está mais disponível. Escolha outro horário.',
             );
           }
+          // Teto por profissional/dia (já sob a trava da agenda do profissional).
+          const noDia = await contarPendentesProfissionalDia(tx, { profissionalId: prof.id, dia, fuso });
+          if (noDia >= MAX_PENDENTES_PROFISSIONAL_DIA) {
+            throw new ErroNegocio(
+              409,
+              'limite_solicitacoes_dia',
+              'Este dia já tem muitas solicitações aguardando a confirmação da clínica. Escolha outro dia ou entre em contato com a clínica.',
+            );
+          }
+          // Contagens por telefone e por IP sob advisory lock (ordem fixa: agenda → telefone → IP),
+          // senão pedidos simultâneos passam todos pela contagem antes de qualquer um gravar.
+          await travarChaveSolicitacao(tx, clinica.id, `telefone:${telefone}`);
+          await travarChaveSolicitacao(tx, clinica.id, `ip:${ipChave}`);
           const pendentes = await tx.solicitacaoAgendamento.count({
             where: { telefone: { in: variantesTelefone(telefone) }, status: 'pendente' },
           });
@@ -276,6 +306,13 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
               409,
               'limite_solicitacoes',
               'Você já tem solicitações aguardando a confirmação da clínica. Aguarde o retorno antes de pedir outro horário.',
+            );
+          }
+          if ((await contarPendentesPorIp(tx, ipChave)) >= MAX_PENDENTES_POR_IP) {
+            throw new ErroNegocio(
+              409,
+              'limite_solicitacoes',
+              'Já existem solicitações aguardando a confirmação da clínica feitas a partir desta conexão. Aguarde o retorno antes de pedir outro horário.',
             );
           }
           return tx.solicitacaoAgendamento.create({
@@ -472,46 +509,79 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
           inicio: s.inicio,
         });
 
-        // Depois do commit: WhatsApp de confirmação (só com o consentimento dado na solicitação).
+        // Depois do commit: WhatsApp de confirmação. Regra (auditoria B1): a solicitação pode ter sido casada com
+        // um paciente existente cujo telefone NÃO é o de quem pediu — o nome/dados do cadastro nunca vão para o
+        // telefone da solicitação, a menos que seja o mesmo telefone do paciente.
+        //   - paciente criado agora (dados da própria solicitação) ⇒ envia ao telefone da solicitação (se consentiu);
+        //   - paciente existente com `aceita_whatsapp` e WhatsApp ⇒ envia ao WhatsApp DO CADASTRO (nome do cadastro);
+        //   - senão, telefone da solicitação só se for igual ao do paciente (consentimento da solicitação, nome
+        //     informado na solicitação); se for diferente, não envia e avisa a recepção (`aviso`).
         let whatsapp: { enfileirada: boolean; erro?: string } | null = null;
-        if (s.aceita_whatsapp) {
-          const [clinica, paciente] = await Promise.all([
-            request.db.clinica.findUnique({
-              where: { id: request.clinicaId },
-              select: { nome: true, endereco: true, cidade: true, uf: true },
-            }),
-            request.db.paciente.findUnique({ where: { id: r.pacienteId }, select: { nome: true, aceita_whatsapp: true } }),
-          ]);
+        let aviso: { codigo: 'telefone_divergente'; mensagem: string } | null = null;
+        const paciente = await request.db.paciente.findUnique({
+          where: { id: r.pacienteId },
+          select: { nome: true, aceita_whatsapp: true, whatsapp: true, telefone: true },
+        });
+        const telefonesPaciente = new Set(
+          [paciente?.whatsapp, paciente?.telefone].flatMap((t) => (t ? variantesTelefone(t) : [])),
+        );
+        const mesmoTelefone = variantesTelefone(s.telefone).some((t) => telefonesPaciente.has(t));
+        const podeCadastro = !pacienteCriado && !!paciente?.aceita_whatsapp && !!paciente.whatsapp;
+        const podeSolicitacao = s.aceita_whatsapp && (pacienteCriado || mesmoTelefone);
+        if (!pacienteCriado && !mesmoTelefone && (s.aceita_whatsapp || podeCadastro)) {
+          aviso = {
+            codigo: 'telefone_divergente',
+            mensagem: podeCadastro
+              ? 'O telefone da solicitação difere do cadastro do paciente: a confirmação foi para o WhatsApp do cadastro. Confira com quem pediu o horário.'
+              : 'O telefone da solicitação difere do cadastro do paciente: a confirmação não foi enviada. Avise o paciente por outro meio.',
+          };
+        }
+        if (podeCadastro || podeSolicitacao) {
+          const clinica = await request.db.clinica.findUnique({
+            where: { id: request.clinicaId },
+            select: { nome: true, endereco: true, cidade: true, uf: true },
+          });
           const endereco = clinica
             ? [clinica.endereco, [clinica.cidade, clinica.uf].filter(Boolean).join('/')].filter(Boolean).join(' — ') || null
             : null;
-          const conteudo = textoAgendamentoOnlineConfirmado({
-            paciente: paciente?.nome ?? s.nome,
-            clinica: clinica?.nome ?? '',
-            profissional: prof.nome,
-            inicio: s.inicio,
-            fuso,
-            endereco,
-          });
-          const res = paciente?.aceita_whatsapp
+          const conteudo = (nome: string) =>
+            textoAgendamentoOnlineConfirmado({
+              paciente: nome,
+              clinica: clinica?.nome ?? '',
+              profissional: prof.nome,
+              inicio: s.inicio,
+              fuso,
+              endereco,
+            });
+          const res = podeCadastro
             ? await enfileirarMensagem({
                 clinicaId: request.clinicaId,
                 pacienteId: r.pacienteId,
                 agendamentoId: r.agendamentoId,
                 tipo: 'agendamento_confirmado',
-                conteudo,
-                telefone: s.telefone,
+                conteudo: conteudo(paciente!.nome),
               })
-            : await enfileirarMensagem({
-                clinicaId: request.clinicaId,
-                pacienteId: null,
-                agendamentoId: r.agendamentoId,
-                tipo: 'agendamento_confirmado',
-                conteudo,
-                telefone: s.telefone,
-                consentimentoExterno: true,
-              });
+            : pacienteCriado && paciente?.aceita_whatsapp
+              ? await enfileirarMensagem({
+                  clinicaId: request.clinicaId,
+                  pacienteId: r.pacienteId,
+                  agendamentoId: r.agendamentoId,
+                  tipo: 'agendamento_confirmado',
+                  conteudo: conteudo(s.nome),
+                  telefone: s.telefone,
+                })
+              : await enfileirarMensagem({
+                  clinicaId: request.clinicaId,
+                  pacienteId: null,
+                  agendamentoId: r.agendamentoId,
+                  tipo: 'agendamento_confirmado',
+                  conteudo: conteudo(s.nome),
+                  telefone: s.telefone,
+                  consentimentoExterno: true,
+                });
           whatsapp = resumoWhatsapp(res);
+        } else if (aviso) {
+          whatsapp = { enfileirada: false, erro: 'telefone_divergente' };
         }
         return {
           solicitacao: r.solicitacao,
@@ -519,6 +589,7 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
           paciente_id: r.pacienteId,
           paciente_criado: pacienteCriado,
           whatsapp,
+          aviso,
         };
       },
     );

@@ -502,3 +502,146 @@ describe('solicitações (recepção)', () => {
     expect((await expirarSolicitacoes({ clinicaId: c.clinica.id })).processadas).toBe(0);
   });
 });
+
+// ----------------------------------------------------------------------------- segurança (auditoria fase 2)
+
+describe('anti-abuso da agenda online (M1)', () => {
+  it('chaveIp: IPv4 inteiro, IPv4 mapeado e IPv6 pelo prefixo /64', async () => {
+    const { chaveIp } = await import('../src/utils/ip');
+    expect(chaveIp('203.0.113.9')).toBe('203.0.113.9');
+    expect(chaveIp('::ffff:203.0.113.9')).toBe('203.0.113.9');
+    expect(chaveIp('2001:db8:1:2::1')).toBe('2001:0db8:0001:0002::/64');
+    expect(chaveIp('2001:db8:1:2:aaaa:bbbb:cccc:dddd')).toBe('2001:0db8:0001:0002::/64');
+    expect(chaveIp('2001:db8:1:3::1')).not.toBe(chaveIp('2001:db8:1:2::1'));
+    expect(chaveIp('')).toBe('desconhecido');
+  });
+
+  it('máx. 3 pendentes futuras por IP (IPv6 conta o /64 inteiro)', async () => {
+    const c = await criarClinica();
+    const d = dia(4);
+    const base = `2001:db8:${(++seq).toString(16)}:${Math.floor(Math.random() * 0xffff).toString(16)}`;
+    const horas = ['09:00', '10:00', '11:00', '12:00'];
+    const codigos: number[] = [];
+    for (let i = 0; i < horas.length; i++) {
+      const r = await solicitar(c, { inicio: instante(d, horas[i]!).toISOString() }, `${base}::${i + 1}`);
+      codigos.push(r.statusCode);
+      if (r.statusCode !== 201) expect(r.json().erro).toBe('limite_solicitacoes');
+    }
+    expect(codigos).toEqual([201, 201, 201, 409]);
+
+    // outro /64 não é afetado; IPv4 idem
+    const outro = await solicitar(c, { inicio: instante(d, '13:00').toISOString() }, `2001:db8:ffff:${seq.toString(16)}::1`);
+    expect(outro.statusCode).toBe(201);
+
+    // IPv4: 3 pendentes; recusar uma libera vaga
+    const ip = ipUnico();
+    const ids: string[] = [];
+    for (const h of ['14:00', '15:00', '16:00']) {
+      const r = await solicitar(c, { inicio: instante(d, h).toISOString() }, ip);
+      expect(r.statusCode).toBe(201);
+      ids.push(r.json().id);
+    }
+    expect((await solicitar(c, { inicio: instante(d, '17:00').toISOString() }, ip)).statusCode).toBe(409);
+    await app.inject({ method: 'POST', url: `/solicitacoes/${ids[0]}/recusar`, headers: comToken(c.tokenRecepcao), payload: { notificar: false } });
+    expect((await solicitar(c, { inicio: instante(d, '17:00').toISOString() }, ip)).statusCode).toBe(201);
+  });
+
+  it('rate limit por /64 no IPv6 (trocar o endereço dentro do /64 não escapa)', async () => {
+    const c = await criarClinica();
+    const base = `2001:db8:abcd:${(++seq).toString(16)}`;
+    const codigos: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const r = await solicitar(c, { inicio: instante(dia(3), '09:00').toISOString(), website: 'x' }, `${base}::${i + 10}`);
+      codigos.push(r.statusCode);
+    }
+    expect(codigos.slice(0, 5).every((s) => s === 201)).toBe(true);
+    expect(codigos[5]).toBe(429);
+  });
+
+  it('teto de 10 pendentes futuras por profissional por dia', async () => {
+    const c = await criarClinica();
+    const d = dia(5);
+    const horas = ['08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '12:30'];
+    await prisma.solicitacaoAgendamento.createMany({
+      data: horas.map((h, i) => ({
+        clinica_id: c.clinica.id,
+        profissional_id: c.profissional.id,
+        inicio: instante(d, h),
+        fim: instante(d, h === '12:30' ? '13:00' : horas[i + 1]!),
+        nome: `Falso ${i}`,
+        telefone: `55${telefoneUnico()}`,
+        ip: ipUnico(),
+      })),
+    });
+    const r = await solicitar(c, { inicio: instante(d, '15:00').toISOString() });
+    expect(r.statusCode).toBe(409);
+    expect(r.json().erro).toBe('limite_solicitacoes_dia');
+    // outro dia continua aceitando
+    expect((await solicitar(c, { inicio: instante(dia(6), '15:00').toISOString() })).statusCode).toBe(201);
+  });
+
+  it('pedidos simultâneos do mesmo telefone não furam o limite (advisory lock)', async () => {
+    const c = await criarClinica();
+    const d = dia(7);
+    const tel = telefoneUnico();
+    const rs = await Promise.all(
+      ['09:00', '10:00', '11:00', '12:00', '13:00'].map((h) => solicitar(c, { inicio: instante(d, h).toISOString(), telefone: tel })),
+    );
+    expect(rs.filter((r) => r.statusCode === 201)).toHaveLength(2);
+    expect(await prisma.solicitacaoAgendamento.count({ where: { clinica_id: c.clinica.id, status: 'pendente' } })).toBe(2);
+  });
+});
+
+describe('confirmação da aprovação com paciente existente (B1)', () => {
+  const aprovar = (c: Clin, id: string, pacienteId: string) =>
+    app.inject({ method: 'POST', url: `/solicitacoes/${id}/aprovar`, headers: comToken(c.tokenRecepcao), payload: { paciente_id: pacienteId } });
+
+  it('telefone diferente e paciente sem WhatsApp autorizado ⇒ não envia e avisa a recepção', async () => {
+    const c = await criarClinica();
+    const real = await prisma.paciente.create({
+      data: { clinica_id: c.clinica.id, nome: 'Paciente Real Sigiloso', whatsapp: `55${telefoneUnico()}`, aceita_whatsapp: false },
+    });
+    const s = (await solicitar(c, { inicio: instante(dia(11), '09:00').toISOString(), nome: 'Quem Pediu' })).json();
+    const r = await aprovar(c, s.id, real.id);
+    expect(r.statusCode).toBe(200);
+    expect(r.json().whatsapp).toEqual({ enfileirada: false, erro: 'telefone_divergente' });
+    expect(r.json().aviso).toMatchObject({ codigo: 'telefone_divergente' });
+    expect(jobs).toHaveLength(0);
+    expect(await prisma.mensagemWhatsapp.count({ where: { clinica_id: c.clinica.id } })).toBe(0);
+  });
+
+  it('paciente com WhatsApp autorizado ⇒ confirmação vai para o WhatsApp do cadastro, não para quem pediu', async () => {
+    const c = await criarClinica();
+    const whatsCadastro = `55${telefoneUnico()}`;
+    const real = await prisma.paciente.create({
+      data: { clinica_id: c.clinica.id, nome: 'Paciente Real Cadastro', whatsapp: whatsCadastro, aceita_whatsapp: true },
+    });
+    const telSolic = telefoneUnico();
+    const s = (await solicitar(c, { inicio: instante(dia(11), '10:00').toISOString(), nome: 'Outra Pessoa', telefone: telSolic })).json();
+    const r = await aprovar(c, s.id, real.id);
+    expect(r.json().whatsapp).toEqual({ enfileirada: true });
+    expect(r.json().aviso).toMatchObject({ codigo: 'telefone_divergente' });
+    const msgs = await prisma.mensagemWhatsapp.findMany({ where: { clinica_id: c.clinica.id } });
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.telefone).toBe(whatsCadastro);
+    expect(msgs[0]!.paciente_id).toBe(real.id);
+    expect(msgs.some((m) => m.telefone.endsWith(telSolic))).toBe(false);
+  });
+
+  it('mesmo telefone do cadastro (sem autorização no cadastro) ⇒ envia com o nome informado na solicitação', async () => {
+    const c = await criarClinica();
+    const tel = telefoneUnico();
+    const real = await prisma.paciente.create({
+      data: { clinica_id: c.clinica.id, nome: 'Cadastrado Sigiloso', whatsapp: `55${tel}`, aceita_whatsapp: false },
+    });
+    const s = (await solicitar(c, { inicio: instante(dia(11), '11:00').toISOString(), nome: 'Informado Pessoa', telefone: tel })).json();
+    const r = await aprovar(c, s.id, real.id);
+    expect(r.json().whatsapp).toEqual({ enfileirada: true });
+    expect(r.json().aviso).toBeNull();
+    const msg = await prisma.mensagemWhatsapp.findFirstOrThrow({ where: { clinica_id: c.clinica.id } });
+    expect(msg).toMatchObject({ paciente_id: null, consentimento_externo: true });
+    expect(msg.conteudo).toContain('Informado');
+    expect(msg.conteudo).not.toContain('Cadastrado');
+    expect(msg.conteudo).not.toContain('Sigiloso');
+  });
+});

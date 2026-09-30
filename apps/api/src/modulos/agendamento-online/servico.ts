@@ -15,6 +15,7 @@ import { assegurarRecurso, assinaturaEstaAtiva } from '../../plugins/recursos';
 import { criarDbTenant, type DbTenant } from '../../plugins/tenant';
 import { obterConfiguracaoClinicaPorId } from '../../servicos/configuracaoClinica';
 import { ErroNegocio } from '../../utils/erros';
+import { chaveIp } from '../../utils/ip';
 import { calcularDisponibilidade, instanteLocal, FUSO_PADRAO, type ClienteAgenda } from '../agendamentos/servico';
 
 export const erroIndisponivel = () =>
@@ -151,6 +152,57 @@ export async function horariosPublicos(
     const fim = new Date(s.fim);
     if (ini >= limite) return false;
     return !pendentes.some((p) => p.inicio < fim && p.fim > ini);
+  });
+}
+
+// ----------------------------------------------------------------------------- anti-abuso
+
+/**
+ * Limites fixos contra esgotamento da agenda por solicitações falsas (além do limite por telefone, que é
+ * configurável em `ao_max_pendentes_por_telefone`). Só contam solicitações `pendente` com horário futuro.
+ * - por IP (IPv4 inteiro / prefixo /64 do IPv6 — `chaveIp`), por clínica;
+ * - por profissional por dia (dia local da clínica): acima disso o dia não aceita novas solicitações até a
+ *   recepção analisar as pendentes.
+ */
+export const MAX_PENDENTES_POR_IP = 3;
+export const MAX_PENDENTES_PROFISSIONAL_DIA = 10;
+
+type ClienteTx = Pick<DbTenant, 'solicitacaoAgendamento' | '$executeRawUnsafe'>;
+
+/** Advisory lock até o fim da transação (serializa contagem + criação para a mesma chave). */
+export async function travarChaveSolicitacao(tx: Pick<DbTenant, '$executeRawUnsafe'>, clinicaId: string, chave: string) {
+  await tx.$executeRawUnsafe('SELECT pg_advisory_xact_lock(hashtext($1))', `${clinicaId}:solicitacao:${chave}`);
+}
+
+/** Pendentes futuras vindas da mesma chave de IP (ver `chaveIp`). */
+export async function contarPendentesPorIp(tx: ClienteTx, chave: string, agora = new Date()): Promise<number> {
+  const ehV6 = chave.endsWith('::/64');
+  const linhas = await tx.solicitacaoAgendamento.findMany({
+    where: {
+      status: 'pendente',
+      inicio: { gte: agora },
+      ip: ehV6 ? { contains: ':' } : chave === 'desconhecido' ? null : { in: [chave, `::ffff:${chave}`] },
+    },
+    select: { ip: true },
+  });
+  if (!ehV6) return linhas.length;
+  return linhas.filter((l) => chaveIp(l.ip) === chave).length;
+}
+
+/** Pendentes futuras do profissional no dia local `dia` (yyyy-MM-dd). */
+export function contarPendentesProfissionalDia(
+  tx: ClienteTx,
+  a: { profissionalId: string; dia: string; fuso: string; agora?: Date },
+): Promise<number> {
+  const inicioDia = instanteLocal(a.dia, '00:00', a.fuso);
+  const fimDia = instanteLocal(somarDias(a.dia, 1), '00:00', a.fuso);
+  const agora = a.agora ?? new Date();
+  return tx.solicitacaoAgendamento.count({
+    where: {
+      profissional_id: a.profissionalId,
+      status: 'pendente',
+      inicio: { gte: inicioDia > agora ? inicioDia : agora, lt: fimDia },
+    },
   });
 }
 

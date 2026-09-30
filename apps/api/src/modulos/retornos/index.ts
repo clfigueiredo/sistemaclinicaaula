@@ -16,7 +16,7 @@
  *   PUT   /retornos/:id                            todos   { dias? | data_prevista?, observacao? } (só pendente/lembrado;
  *           mudar a data zera o convite e volta a `pendente`)
  *   PATCH /retornos/:id/status                     todos   { status: 'agendado' | 'cancelado' | 'pendente', agendamento_retorno_id? }
- *           agendado: agendamento do MESMO paciente, não cancelado, posterior à origem (validado no tenant).
+ *           agendado: agendamento do MESMO paciente E do MESMO profissional, não cancelado, posterior à origem.
  *           pendente: reabre um retorno cancelado/agendado (remove o vínculo).
  *   POST  /retornos/:id/convidar                   admin, recepção   convite agora pelo WhatsApp ⇒ { retorno, whatsapp }
  *   GET   /retornos/configuracao                   admin   { convite_ativo, dias_antecedencia }
@@ -282,10 +282,11 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
       if (agendamento_retorno_id) {
         const ag = ou404(
           await request.db.agendamento.findFirst({
-            where: { id: agendamento_retorno_id, paciente_id: atual.paciente_id },
+            // Mesmo paciente E mesmo profissional do retorno (não vincula agenda de outro profissional).
+            where: { id: agendamento_retorno_id, paciente_id: atual.paciente_id, profissional_id: atual.profissional_id },
             select: { id: true, status: true, inicio: true },
           }),
-          'Agendamento não encontrado para este paciente.',
+          'Agendamento não encontrado para este paciente e profissional.',
         );
         if (ag.id === atual.agendamento_origem_id || ag.inicio <= atual.agendamento_origem.inicio) {
           throw erros.invalido('O agendamento do retorno precisa ser posterior à consulta de origem.', 'agendamento_invalido');

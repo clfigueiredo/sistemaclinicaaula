@@ -12,7 +12,9 @@
  *   PUT    /admin/cobranca/gateways/:provedor             { ambiente?, credenciais?, segredo_webhook?, dias_tolerancia?,
  *                                                          metodos?, dia_vencimento_padrao?, descricao_cobranca? }
  *                                                          campo de segredo vazio/ausente = mantém o atual; segredo_webhook null = remove
- *   POST   /admin/cobranca/gateways/:provedor/ativar      desativa os outros e ativa este (transação). 409 gateway_nao_configurado
+ *   POST   /admin/cobranca/gateways/:provedor/ativar      desativa os outros e ativa este (transação). 409 gateway_nao_configurado.
+ *                                                          Resposta + `aviso` (string | null): gateway em sandbox com clínicas
+ *                                                          em cobrança automática (não bloqueia; a UI confirma antes)
  *   POST   /admin/cobranca/gateways/:provedor/desativar
  *   POST   /admin/cobranca/gateways/:provedor/testar      chamada leve ao gateway ⇒ { ok, mensagem }
  *   GET    /admin/cobranca/cobrancas?status&clinica_id&de&ate&pagina&por_pagina   Paginado + totais
@@ -21,7 +23,8 @@
  *   POST   /admin/cobranca/clinicas/:clinicaId/assinatura { dia_vencimento, metodo?, gerar_agora? } liga a cobrança recorrente
  *                                                          (metodo ⇒ assinaturas.metodo_cobranca, usado pelo worker)
  *   DELETE /admin/cobranca/clinicas/:clinicaId/assinatura desliga a cobrança recorrente (cobranças existentes ficam)
- *   POST   /admin/cobranca/cobrancas/:id/cancelar         cancela no gateway e aqui (pendente/vencida)
+ *   POST   /admin/cobranca/cobrancas/:id/cancelar         cancela no gateway e aqui (pendente/vencida); `estornada` ⇒ só aqui
+ *                                                          (perdoa a dívida do estorno/chargeback para a tolerância)
  *   GET    /admin/cobranca/eventos?gateway&pagina&por_pagina   webhooks recebidos (diagnóstico)
  *
  * CLÍNICA (admin da clínica):
@@ -279,7 +282,19 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
         await tx.gatewayPagamento.update({ where: { provedor: p }, data: { ativo: true } });
       });
       request.log.info({ gateway: p, admin: request.adminPlataforma?.id }, 'Gateway de pagamento ativado');
-      return obterVisao(p);
+      // Não bloqueia: só avisa se um gateway em SANDBOX passa a gerar as cobranças de clínicas com cobrança
+      // automática (as faturas seriam de teste — e o pagamento delas é ignorado se o gateway for para produção).
+      let aviso: string | null = null;
+      if (visao.ambiente === 'sandbox') {
+        const clinicasAutomaticas = await prisma.assinatura.count({
+          where: { gateway: { not: null }, dia_vencimento: { not: null }, status: { in: ['ativa', 'vencida'] } },
+        });
+        if (clinicasAutomaticas > 0) {
+          aviso = `${visao.nome} está em SANDBOX (ambiente de teste) e ${clinicasAutomaticas} clínica(s) têm cobrança automática: as próximas faturas serão de teste e nenhum pagamento real será recebido.`;
+          request.log.warn({ gateway: p, clinicas: clinicasAutomaticas }, 'Gateway em sandbox ativado com cobrança automática ligada');
+        }
+      }
+      return { ...(await obterVisao(p)), aviso };
     });
 
     admin.post('/admin/cobranca/gateways/:provedor/desativar', { schema: { params: ParamsProvedor } }, async (request) => {

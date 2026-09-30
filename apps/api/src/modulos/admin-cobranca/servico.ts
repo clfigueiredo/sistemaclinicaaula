@@ -14,9 +14,18 @@
  *     assinatura `ativa` → `vencida` (somente leitura; volta a `ativa` sozinha quando o pagamento é confirmado).
  *     Não usamos `bloqueada`: esse status fica reservado para bloqueio manual do super admin.
  *   - Pagamento confirmado ⇒ cobrança `paga` + `pago_em`; assinatura `ativa` (exceto se `cancelada`/`bloqueada`
- *     manualmente) e `expira_em` = fim do ciclo pago (vencimento + 1 mês) + dias de tolerância. Se o worker
- *     parar, a expiração ainda leva a clínica para somente leitura (statusEfetivo) — nunca antes do prazo.
- *   - Estorno/cancelamento/vencimento vindos do gateway só mudam o status da cobrança.
+ *     manualmente, ou se ainda restar OUTRA cobrança em dívida além da tolerância) e `expira_em` = fim do ciclo
+ *     pago (vencimento + 1 mês) + dias de tolerância — só avança, nunca recua nem é gravado no passado (pagar um
+ *     ciclo antigo não mexe nele). Se o worker parar, a expiração ainda leva a clínica para somente leitura
+ *     (statusEfetivo) — nunca antes do prazo.
+ *   - Pagamento de cobrança `cancelada` ⇒ nada muda (não reativa); o evento fica com aviso para o super admin.
+ *   - Ambiente: cada cobrança grava o ambiente do gateway em que foi gerada (`cobrancas.ambiente`). Pagamento de
+ *     cobrança SANDBOX com o gateway já em PRODUÇÃO ⇒ ignorado (evento com aviso).
+ *   - Estorno/chargeback de cobrança PAGA ⇒ `estornada` e `expira_em` recalculado pelo último ciclo ainda pago
+ *     (pode recuar); sem nenhuma cobrança paga, ou com dívida além da tolerância, a assinatura vira `vencida`.
+ *     `estornada` conta como dívida (igual a pendente/vencida) na tolerância até o super admin cancelá-la
+ *     (perdão) — cancelar uma estornada é só local.
+ *   - Cancelamento/vencimento vindos do gateway só mudam o status da cobrança.
  *   - Sem gateway ativo: nada é gerado (o worker só registra no log); nada quebra.
  */
 import { Prisma, type Cobranca, type MetodoCobranca, type ProvedorPagamento, type StatusCobranca } from '@prisma/client';
@@ -39,6 +48,8 @@ import { ErroNegocio, ou404 } from '../../utils/erros';
 export const ANTECEDENCIA_GERACAO_DIAS = 10;
 export const TOLERANCIA_PADRAO_DIAS = 5;
 const STATUS_EM_ABERTO: StatusCobranca[] = ['pendente', 'vencida'];
+/** Contam como dívida para a tolerância: em aberto + estornada (chargeback) ainda não perdoada. */
+const STATUS_DIVIDA: StatusCobranca[] = ['pendente', 'vencida', 'estornada'];
 
 // ----------------------------------------------------------------------------- datas ('YYYY-MM-DD')
 
@@ -106,6 +117,7 @@ export function serializarCobranca(c: Omit<Cobranca, 'payload'> & { payload?: un
     valor: c.valor.toFixed(2),
     vencimento: paraDataIso(c.vencimento),
     status: c.status,
+    ambiente: c.ambiente,
     metodo: c.metodo,
     link_pagamento: c.link_pagamento,
     pago_em: c.pago_em,
@@ -231,6 +243,7 @@ export async function gerarCobranca(dados: DadosNovaCobranca, hoje = hojeIso()) 
       vencimento: dataSemHora(dados.vencimento),
       metodo: metodo ?? null,
       status: 'pendente',
+      ambiente: config.ambiente,
     },
   });
 
@@ -325,10 +338,11 @@ export async function resumoAssinatura(clinicaId: string) {
 
 export async function cancelarCobranca(id: string) {
   const c = ou404(await prisma.cobranca.findUnique({ where: { id } }), 'Cobrança não encontrada.');
-  if (!STATUS_EM_ABERTO.includes(c.status)) {
-    throw new ErroNegocio(409, 'cobranca_nao_cancelavel', 'Só é possível cancelar cobranças pendentes ou vencidas.');
+  if (!STATUS_EM_ABERTO.includes(c.status) && c.status !== 'estornada') {
+    throw new ErroNegocio(409, 'cobranca_nao_cancelavel', 'Só é possível cancelar cobranças pendentes, vencidas ou estornadas.');
   }
-  if (c.id_externo) {
+  // Estornada: o dinheiro já voltou no gateway; cancelar aqui só "perdoa" a dívida (deixa de contar na tolerância).
+  if (c.id_externo && c.status !== 'estornada') {
     const gw = await obterGateway(c.gateway);
     if (gw) {
       try {
@@ -341,6 +355,47 @@ export async function cancelarCobranca(id: string) {
   }
   const atualizada = await prisma.cobranca.update({ where: { id }, data: { status: 'cancelada' } });
   return serializarCobranca(atualizada);
+}
+
+// ----------------------------------------------------------------------------- dívida (tolerância)
+
+type ClienteCobranca = Pick<Prisma.TransactionClient, 'cobranca' | 'gatewayPagamento'>;
+
+async function mapaTolerancias(cliente: ClienteCobranca): Promise<Map<ProvedorPagamento, number>> {
+  const gws = await cliente.gatewayPagamento.findMany({ select: { provedor: true, dias_tolerancia: true } });
+  return new Map(gws.map((g) => [g.provedor, g.dias_tolerancia]));
+}
+
+/**
+ * Clínicas (dentre `clinicaIds`, ou todas) com cobrança em DÍVIDA (pendente/vencida/estornada) cujo vencimento +
+ * tolerância do gateway já passou em `hoje`. `exceto`: id de cobrança a desconsiderar (a que está sendo paga).
+ */
+export async function clinicasComDividaAlemDaTolerancia(
+  cliente: ClienteCobranca,
+  opcoes: { hoje: string; clinicaIds?: string[]; exceto?: string; where?: Prisma.CobrancaWhereInput },
+): Promise<Set<string>> {
+  const tolerancias = await mapaTolerancias(cliente);
+  const linhas = await cliente.cobranca.findMany({
+    where: {
+      status: { in: STATUS_DIVIDA },
+      vencimento: { lt: dataSemHora(opcoes.hoje) },
+      ...(opcoes.clinicaIds && { clinica_id: { in: opcoes.clinicaIds } }),
+      ...(opcoes.exceto && { id: { not: opcoes.exceto } }),
+      ...opcoes.where,
+    },
+    select: { clinica_id: true, gateway: true, vencimento: true },
+  });
+  const r = new Set<string>();
+  for (const c of linhas) {
+    const limite = somarDias(paraDataIso(c.vencimento), tolerancias.get(c.gateway) ?? TOLERANCIA_PADRAO_DIAS);
+    if (opcoes.hoje > limite) r.add(c.clinica_id);
+  }
+  return r;
+}
+
+/** Fim do ciclo pago por uma cobrança: vencimento + 1 mês + tolerância do gateway, 23:59 no fuso padrão. */
+function fimDoCicloPago(vencimento: Date, tolerancia: number): Date {
+  return fimDoDia(somarDias(somarMeses(paraDataIso(vencimento), 1), tolerancia));
 }
 
 // ----------------------------------------------------------------------------- webhook
@@ -441,6 +496,16 @@ async function aplicarEvento(provedor: ProvedorPagamento, evento: EventoPagament
 
     switch (evento.acao) {
       case 'cobranca_paga': {
+        if (cobranca.status === 'cancelada') {
+          return 'Pagamento recebido para uma cobrança CANCELADA: nada foi alterado e a assinatura não foi reativada. Confira no gateway e estorne ou regularize manualmente.';
+        }
+        const gw = await tx.gatewayPagamento.findUnique({
+          where: { provedor },
+          select: { dias_tolerancia: true, ambiente: true },
+        });
+        if (cobranca.ambiente === 'sandbox' && gw?.ambiente === 'producao') {
+          return 'Pagamento de uma cobrança gerada em SANDBOX recebido com o gateway em produção: ignorado (nada foi alterado).';
+        }
         if (cobranca.status !== 'paga') {
           await tx.cobranca.update({
             where: { id: cobranca.id },
@@ -451,19 +516,27 @@ async function aplicarEvento(provedor: ProvedorPagamento, evento: EventoPagament
           ? await tx.assinatura.findUnique({ where: { id: cobranca.assinatura_id } })
           : await tx.assinatura.findUnique({ where: { clinica_id: cobranca.clinica_id } });
         if (!assinatura) return null;
-        const gw = await tx.gatewayPagamento.findUnique({ where: { provedor }, select: { dias_tolerancia: true } });
         const tolerancia = gw?.dias_tolerancia ?? TOLERANCIA_PADRAO_DIAS;
-        const fimCiclo = fimDoDia(somarDias(somarMeses(paraDataIso(cobranca.vencimento), 1), tolerancia));
-        const avancar = !assinatura.expira_em || assinatura.expira_em < fimCiclo;
+        const fimCiclo = fimDoCicloPago(cobranca.vencimento, tolerancia);
+        // Nunca recua e nunca grava no passado (pagamento de ciclo antigo não mexe na expiração).
+        const avancar = fimCiclo.getTime() > Date.now() && (!assinatura.expira_em || assinatura.expira_em < fimCiclo);
         const manual = assinatura.status === 'cancelada' || assinatura.status === 'bloqueada';
+        const outraDivida =
+          !manual &&
+          (await clinicasComDividaAlemDaTolerancia(tx, { hoje: hojeIso(), clinicaIds: [cobranca.clinica_id], exceto: cobranca.id }))
+            .size > 0;
         await tx.assinatura.update({
           where: { id: assinatura.id },
           data: {
-            ...(!manual && { status: 'ativa' }),
+            ...(!manual && !outraDivida && { status: 'ativa' }),
             ...(avancar && { expira_em: fimCiclo }),
           },
         });
-        return manual ? `Pagamento registrado; assinatura mantida como ${assinatura.status} (status definido manualmente).` : null;
+        if (manual) return `Pagamento registrado; assinatura mantida como ${assinatura.status} (status definido manualmente).`;
+        if (outraDivida) {
+          return `Pagamento registrado, mas a clínica ainda tem outra cobrança em aberto além da tolerância: assinatura mantida como ${assinatura.status}.`;
+        }
+        return null;
       }
       case 'cobranca_vencida':
         if (cobranca.status === 'pendente') {
@@ -475,14 +548,49 @@ async function aplicarEvento(provedor: ProvedorPagamento, evento: EventoPagament
           await tx.cobranca.update({ where: { id: cobranca.id }, data: { status: 'cancelada', payload } });
         }
         return null;
-      case 'cobranca_estornada':
-        if (cobranca.status !== 'estornada' && cobranca.status !== 'cancelada') {
-          await tx.cobranca.update({ where: { id: cobranca.id }, data: { status: 'estornada', payload } });
-        }
-        return null;
+      case 'cobranca_estornada': {
+        if (cobranca.status === 'estornada' || cobranca.status === 'cancelada') return null;
+        const estavaPaga = cobranca.status === 'paga';
+        await tx.cobranca.update({ where: { id: cobranca.id }, data: { status: 'estornada', payload } });
+        if (!estavaPaga) return null;
+        return recalcularAssinaturaAposEstorno(tx, cobranca);
+      }
     }
     return null;
   });
+}
+
+/**
+ * Estorno/chargeback de cobrança que estava PAGA: o acesso pago por ela deixa de valer.
+ * `expira_em` = fim do ciclo da última cobrança AINDA paga (pode recuar); sem nenhuma, ou se o novo prazo já
+ * passou, ou se houver dívida além da tolerância (a própria estornada conta), assinatura `ativa`/`teste` ⇒
+ * `vencida`. Status manual (`cancelada`/`bloqueada`) não muda.
+ */
+async function recalcularAssinaturaAposEstorno(tx: Prisma.TransactionClient, cobranca: Cobranca): Promise<string> {
+  const assinatura = cobranca.assinatura_id
+    ? await tx.assinatura.findUnique({ where: { id: cobranca.assinatura_id } })
+    : await tx.assinatura.findUnique({ where: { clinica_id: cobranca.clinica_id } });
+  if (!assinatura) return 'Estorno de cobrança paga registrado (clínica sem assinatura).';
+  const ultimaPaga = await tx.cobranca.findFirst({
+    where: { clinica_id: cobranca.clinica_id, status: 'paga' },
+    orderBy: { vencimento: 'desc' },
+  });
+  const tolerancias = await mapaTolerancias(tx);
+  const novoExpira = ultimaPaga
+    ? fimDoCicloPago(ultimaPaga.vencimento, tolerancias.get(ultimaPaga.gateway) ?? TOLERANCIA_PADRAO_DIAS)
+    : null;
+  const divida =
+    (await clinicasComDividaAlemDaTolerancia(tx, { hoje: hojeIso(), clinicaIds: [cobranca.clinica_id] })).size > 0;
+  const vencer = !novoExpira || novoExpira.getTime() < Date.now() || divida;
+  const podeMudarStatus = assinatura.status === 'ativa' || assinatura.status === 'teste';
+  await tx.assinatura.update({
+    where: { id: assinatura.id },
+    data: { expira_em: novoExpira, ...(vencer && podeMudarStatus && { status: 'vencida' }) },
+  });
+  const prazo = novoExpira ? `acesso pago até ${hojeNoFuso(env.TZ_PADRAO, novoExpira)}` : 'nenhuma cobrança paga restante';
+  return vencer && podeMudarStatus
+    ? `Estorno/chargeback de cobrança paga: ${prazo}; assinatura marcada como vencida.`
+    : `Estorno/chargeback de cobrança paga: ${prazo}.`;
 }
 
 // ----------------------------------------------------------------------------- job diário
@@ -502,7 +610,7 @@ type Log = { info: (msg: string) => void; warn: (msg: string) => void };
  * Job diário (idempotente — pode rodar várias vezes no mesmo dia):
  *   1. cobranças `pendente` com vencimento < hoje ⇒ `vencida`;
  *   2. gera a cobrança do próximo ciclo das assinaturas com cobrança automática (gateway ativo);
- *   3. tolerância: cobrança em aberto há mais de N dias ⇒ assinatura `ativa` → `vencida`.
+ *   3. tolerância: cobrança em dívida (pendente/vencida/estornada) há mais de N dias ⇒ assinatura `ativa` → `vencida`.
  */
 export async function executarJobCobrancas(hoje = hojeIso(), log: Log = console): Promise<ResumoJobCobrancas> {
   const resumo: ResumoJobCobrancas = { processadas: 0, marcadas_vencidas: 0, geradas: 0, assinaturas_vencidas: 0, erros: 0 };
@@ -546,26 +654,11 @@ export async function executarJobCobrancas(hoje = hojeIso(), log: Log = console)
     }
   }
 
-  // 3. tolerância
-  const tolerancias = new Map(
-    (await prisma.gatewayPagamento.findMany({ select: { provedor: true, dias_tolerancia: true } })).map((g) => [
-      g.provedor,
-      g.dias_tolerancia,
-    ]),
-  );
-  const emAberto = await prisma.cobranca.findMany({
-    where: {
-      status: { in: STATUS_EM_ABERTO },
-      vencimento: { lt: dataHoje },
-      clinica: { assinatura: { is: { status: 'ativa' } } },
-    },
-    select: { clinica_id: true, gateway: true, vencimento: true },
+  // 3. tolerância (estornada = chargeback conta como dívida, igual a pendente/vencida)
+  const estouradas = await clinicasComDividaAlemDaTolerancia(prisma, {
+    hoje,
+    where: { clinica: { assinatura: { is: { status: 'ativa' } } } },
   });
-  const estouradas = new Set<string>();
-  for (const c of emAberto) {
-    const limite = somarDias(paraDataIso(c.vencimento), tolerancias.get(c.gateway) ?? TOLERANCIA_PADRAO_DIAS);
-    if (hoje > limite) estouradas.add(c.clinica_id);
-  }
   if (estouradas.size) {
     const r = await prisma.assinatura.updateMany({
       where: { clinica_id: { in: [...estouradas] }, status: 'ativa' },

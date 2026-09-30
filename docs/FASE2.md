@@ -1,7 +1,8 @@
 # Fase 2 do produto — contratos por módulo
 
 > Fundação entregue em 30/09/2026 (migration `20261001000000_fase2_produto`); módulos implementados em paralelo
-> e integrados em seguida (migration `20261002000000_ajustes_fase2`). Este documento é o **contrato** entre os
+> e integrados em seguida (migration `20261002000000_ajustes_fase2`); correções da auditoria de segurança na
+> migration `20261003000000_seguranca_fase2` (resumo na §12). Este documento é o **contrato** entre os
 > módulos da fase 2 e registra também o que foi acrescentado na implementação (parágrafos "Adições"). Leia também
 > `CLAUDE.md` (regras e convenções) e `docs/ARQUITETURA.md` §7 (modelo de dados).
 
@@ -166,11 +167,11 @@ serviços de `modulos/agendamentos/servico.ts` (`calcularDisponibilidade`, `trav
 |---|---|---|---|
 | `GET /publico/clinicas/:slug` | público (rate limit 60/min/IP) | — | `{ clinica: { nome, slug, telefone, endereco, cidade, uf, fuso_horario }, mensagem_boas_vindas, antecedencia_min_horas, dias_a_frente, hoje ('YYYY-MM-DD' no fuso da clínica), profissionais: [{ id, nome, especialidade, duracao_consulta_min }] }` |
 | `GET /publico/clinicas/:slug/disponibilidade` | público (60/min) | `profissional_id, data (YYYY-MM-DD)` | `{ data, fuso, horarios: [{ inicio, fim, hora }] }` — sem horários antes de `agora + antecedência`, nem além de `dias_a_frente`, nem com solicitação pendente no mesmo horário |
-| `POST /publico/clinicas/:slug/solicitacoes` | público (5/min/IP) | `{ profissional_id, inicio, nome, telefone, email?, cpf?, nascimento?, observacoes?, aceita_whatsapp, website? }` | 201 `{ id, status: 'pendente', inicio, fim, profissional: { nome } }`. Honeypot `website` preenchido ⇒ 201 falso (nada gravado). 409 `horario_indisponivel`; 409 `limite_solicitacoes` (pendentes por telefone) |
+| `POST /publico/clinicas/:slug/solicitacoes` | público (5/min/IP; IPv6 por /64) | `{ profissional_id, inicio, nome, telefone, email?, cpf?, nascimento?, observacoes?, aceita_whatsapp, website? }` | 201 `{ id, status: 'pendente', inicio, fim, profissional: { nome } }`. Honeypot `website` preenchido ⇒ 201 falso (nada gravado). 409 `horario_indisponivel`; 409 `limite_solicitacoes` (pendentes por telefone, ou 3 pendentes futuras por IP//64); 409 `limite_solicitacoes_dia` (10 pendentes futuras do profissional no dia) |
 | `GET /solicitacoes` | admin, recepção | `status?, pagina, por_pagina` | `Paginado<Solicitacao>` (+ profissional) |
 | `GET /solicitacoes/resumo` | admin, recepção | — | `{ pendentes }` |
 | `GET /solicitacoes/:id` | admin, recepção | — | solicitação + `pacientes_candidatos: [{ id, nome, cpf, whatsapp, motivo: 'cpf'\|'telefone' }]` |
-| `POST /solicitacoes/:id/aprovar` | admin, recepção | `{ paciente_id?, tipo?, convenio_id?, observacoes? }` (sem `paciente_id` ⇒ cria paciente com nome/cpf/whatsapp/e-mail/nascimento e `aceita_whatsapp` da solicitação) | `{ solicitacao, agendamento_id, paciente_id, whatsapp: { enfileirada, erro? } \| null }`. 409 se não pendente; erros normais da agenda (`horario_ocupado`, `limite_atingido`…) |
+| `POST /solicitacoes/:id/aprovar` | admin, recepção | `{ paciente_id?, tipo?, convenio_id?, observacoes? }` (sem `paciente_id` ⇒ cria paciente com nome/cpf/whatsapp/e-mail/nascimento e `aceita_whatsapp` da solicitação) | `{ solicitacao, agendamento_id, paciente_id, paciente_criado, whatsapp: { enfileirada, erro? } \| null, aviso: { codigo: 'telefone_divergente', mensagem } \| null }` (regra de envio na §12). 409 se não pendente; erros normais da agenda (`horario_ocupado`, `limite_atingido`…) |
 | `POST /solicitacoes/:id/recusar` | admin, recepção | `{ motivo?, notificar? = true }` | `{ solicitacao, whatsapp }` |
 | `GET /agendamento-online/configuracao` | admin | — | `{ ativo, antecedencia_min_horas, dias_a_frente, mensagem_boas_vindas, max_pendentes_por_telefone, slug, link_publico, profissionais: [{ id, nome, ativo, agendamento_online }] }` |
 | `PUT /agendamento-online/configuracao` | admin | `{ ativo?, antecedencia_min_horas? (0–168), dias_a_frente? (1–180), mensagem_boas_vindas?, max_pendentes_por_telefone? (1–10), profissionais_visiveis?: uuid[] }` | idem GET |
@@ -232,7 +233,7 @@ agenda (cancelado/faltou) e `AvisoTopoListaEspera` no topo. **Chaves:** `chavesL
 | `GET /documentos/pacientes/:pacienteId` | — | `[{ id, tipo, titulo, criado_em, profissional: { id, nome, registro }, autor: { id, nome }, agendamento_id }]` (log `listar`) |
 | `GET /documentos/:id` | — | documento completo (log `visualizar`) |
 | `POST /documentos` | `{ paciente_id, tipo, conteudo? (≤ 20000), titulo?, agendamento_id?, metadados? }` | 201 documento (log `criar`). `profissional_id = profissionalAutor(request)`. Conteúdo vazio ⇒ montado dos metadados (itens da receita, exames) ou do modelo padrão (atestado, declaração); 400 `conteudo_vazio` se não der |
-| `POST /documentos/previa` | mesmo corpo do `POST /documentos` | `application/pdf` de pré-visualização — **nada é gravado** (mesmas validações e regras de acesso) |
+| `POST /documentos/previa` | mesmo corpo do `POST /documentos` | `application/pdf` de pré-visualização — **nada é gravado** (mesmas validações e regras de acesso). Log `previa` com `entidade_id` = paciente |
 | `GET /documentos/:id/pdf` | — | `application/pdf` inline, `Content-Disposition: inline; filename="<tipo>-<data>.pdf"` (log `baixar`) |
 
 `metadados` sugeridos: atestado `{ dias?, cid?, exibir_cid? }` (CID só é gravado com `exibir_cid = true`);
@@ -257,7 +258,7 @@ registro do profissional, rodapé com o id do documento. Entidade do log: `'docu
 | `GET /retornos/agendamento/:agendamentoId` | — | `Retorno \| null` |
 | `POST /retornos` | `{ agendamento_origem_id, dias? (1–730) \| data_prevista?, observacao? }` | 201. 409 `status_invalido` (origem ≠ compareceu/atendido), 409 `retorno_existente` |
 | `PUT /retornos/:id` | `{ dias? \| data_prevista?, observacao? }` | retorno (só pendente/lembrado; mudar a data zera o convite e volta a `pendente`) |
-| `PATCH /retornos/:id/status` | `{ status: 'agendado'\|'cancelado'\|'pendente', agendamento_retorno_id? }` | retorno. `agendado` exige agendamento do mesmo paciente, não cancelado, posterior à origem; `pendente` reabre (remove o vínculo) |
+| `PATCH /retornos/:id/status` | `{ status: 'agendado'\|'cancelado'\|'pendente', agendamento_retorno_id? }` | retorno. `agendado` exige agendamento do mesmo paciente **e do mesmo profissional do retorno**, não cancelado, posterior à origem (senão 404); `pendente` reabre (remove o vínculo) |
 | `POST /retornos/:id/convidar` | — | `{ whatsapp }` + `convite_enviado_em`, status `lembrado` |
 | `GET/PUT /retornos/configuracao` | `{ convite_ativo?, dias_antecedencia? (0–60) }` | `{ convite_ativo, dias_antecedencia }` |
 
@@ -348,7 +349,8 @@ manualmente — o evento registra um aviso) e **`expira_em` avança** para o fim
 (vencimento + 1 mês + `dias_tolerancia`, 23:59 em `TZ_PADRAO`; nunca recua). É uma segunda barreira coerente com
 `statusEfetivo`: se o worker parar, a clínica ainda cai em somente leitura quando o ciclo pago acabar — nunca antes.
 (O contrato original dizia `expira_em` null; a implementação manteve o avanço por esse motivo.)
-`vencida`/`cancelada`/`estornada` ⇒ só o status da cobrança. Job diário: pendentes com vencimento < hoje ⇒
+`vencida`/`cancelada` ⇒ só o status da cobrança; `estornada` de cobrança **paga** também recalcula a assinatura
+(§12). Job diário: pendentes com vencimento < hoje ⇒
 `vencida`; gera a cobrança do próximo ciclo (até 10 dias antes, no máximo uma por mês — uma cobrança cancelada
 significa "não cobrar este mês") no método `assinaturas.metodo_cobranca` e com a descrição
 `gateways_pagamento.descricao_cobranca`; cobrança em aberto há **mais** de `dias_tolerancia` dias ⇒ assinatura
@@ -455,3 +457,22 @@ Tipos/enums compartilhados novos em `api/tipos.ts` (`FormaPagamento`, `StatusTit
 | `CHAVE_CRIPTOGRAFIA` | AES-256-GCM dos segredos (64 hex). Obrigatória em produção; dev/teste usam chave fixa com aviso | — |
 | `API_URL_PUBLICA` | Base das URLs de webhook dos gateways (`env.API_URL_PUBLICA`, sem barra final) | `http://localhost:3333` |
 | `WEB_URL_PUBLICA` | Links enviados ao paciente (`env.WEB_URL_PUBLICA`) | 1ª origem de `WEB_URL` |
+
+## 12. Correções da auditoria de segurança (migration `20261003000000_seguranca_fase2`)
+
+Testes de regressão nos arquivos de cada módulo (`test/agendamento-online.test.ts`, `cobranca.test.ts`,
+`financeiro.test.ts`, `retornos.test.ts`, `documentos.test.ts`, `fase2.test.ts`), blocos "segurança (auditoria)".
+
+| Item | Decisão |
+|---|---|
+| Agendamento online — anti-abuso | Além de `ao_max_pendentes_por_telefone`: no máx. **3** pendentes futuras por IP por clínica (`MAX_PENDENTES_POR_IP`) e **10** pendentes futuras por profissional por dia local (`MAX_PENDENTES_PROFISSIONAL_DIA`), constantes em `modulos/agendamento-online/servico.ts`. Contagens de telefone e IP sob advisory lock (`<clinica>:solicitacao:telefone:<tel>` e `...:ip:<chave>`, ordem fixa agenda → telefone → IP). Chave de IP = `chaveIp` (`utils/ip.ts`): IPv4 inteiro, IPv6 pelo prefixo **/64**; o `@fastify/rate-limit` usa a mesma chave (`keyGenerator` em `app.ts`, vale para todas as rotas com rate limit). |
+| Confirmação da aprovação online | Paciente **criado** agora ⇒ telefone da solicitação (consentimento dela). Paciente **existente** (escolhido ou casado por CPF) ⇒ WhatsApp do cadastro se `aceita_whatsapp` (nome do cadastro); senão telefone da solicitação **só se for igual** ao do cadastro (nome informado na solicitação, `consentimentoExterno`). Telefone diferente ⇒ não envia para ele e a resposta traz `aviso: { codigo: 'telefone_divergente' }` (toast na tela de Solicitações). O nome do cadastro nunca vai para o telefone da solicitação. |
+| Estorno/chargeback | `cobranca_estornada` de cobrança **paga** ⇒ `expira_em` = fim do ciclo da última cobrança ainda paga (pode recuar); sem nenhuma paga, prazo já vencido ou dívida além da tolerância ⇒ assinatura `ativa`/`teste` → `vencida`. `estornada` conta como dívida (igual a pendente/vencida) na tolerância do job diário e ao pagar outra cobrança. O super admin pode **cancelar** uma estornada (só local, não chama o gateway) para perdoar a dívida. |
+| Pagamento de cobrança cancelada/antiga | `cobranca_paga` de cobrança `cancelada` ⇒ nada muda (evento com aviso). Ao pagar, a assinatura só volta a `ativa` se não restar **outra** cobrança em dívida além da tolerância (senão aviso no evento). `expira_em` só avança e nunca é gravado no passado. |
+| Ambiente da cobrança | `cobrancas.ambiente` (`sandbox`/`producao`, gravado na geração; as antigas receberam o ambiente atual do gateway). `cobranca_paga` de cobrança sandbox com o gateway já em produção ⇒ ignorado (evento com aviso). `POST /admin/cobranca/gateways/:p/ativar` devolve `aviso` quando o gateway está em sandbox e há clínicas com cobrança automática (não bloqueia; a UI pede confirmação "Ativar em sandbox"). |
+| Mercado Pago — cliente | O id fica em `assinaturas.cliente_externo_id` (por clínica). A busca por e-mail é só fallback e só reaproveita cliente com `description = "Clínica <clinicaId>"`; senão cria um novo. |
+| AES-GCM | `descriptografar` exige tag de 16 bytes e IV de 12 (`authTagLength: 16`); tag truncada ⇒ `ErroCripto`. |
+| CSV | Exportações (`/financeiro/relatorios/exportar`, inclusive repasses): célula de **texto** que começa com `= + - @` TAB ou CR recebe `'` na frente; valores numéricos continuam números. |
+| Recepção × repasses | `GET /financeiro/movimentacoes`: recepção com `origem=repasse` ou `profissional_id` ⇒ 403; a lista da recepção exclui repasses e estornos de repasse (totais também). `POST /financeiro/movimentacoes` com `profissional_id` pela recepção ⇒ 403 (o profissional vem do agendamento: `agendamento_id` ou `/recebimentos`). No Caixa, os campos de profissional só aparecem para o admin. |
+| GET com assinatura inativa | `GET /financeiro/contas`/`categorias` não criam a conta "Caixa" nem as categorias padrão em somente leitura (lista vazia se nada existir). |
+| Marcador `[agendamento:<id>]` | Conferido: nenhum código lê o marcador de `observacoes` (só a migração de dados de `ajustes_fase2`, que exige a mesma clínica). |

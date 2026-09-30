@@ -234,11 +234,14 @@ export default function Caixa() {
           <SelectConta valor={conta} onChange={mudar(setConta)} vazio={{ valor: TODOS, rotulo: 'Todas as contas' }} />
           <SelectCategoria valor={categoria} onChange={mudar(setCategoria)} vazio={{ valor: TODOS, rotulo: 'Todas as categorias' }} />
           <SelectForma valor={forma} onChange={mudar(setForma)} vazio={{ valor: TODOS, rotulo: 'Todas as formas' }} />
-          <SelectProfissional
-            valor={profissional}
-            onChange={mudar(setProfissional)}
-            vazio={{ valor: TODOS, rotulo: 'Todos os profissionais' }}
-          />
+          {/* Recepção não filtra por profissional nem vê repasses (o backend recusa). */}
+          {ehAdmin && (
+            <SelectProfissional
+              valor={profissional}
+              onChange={mudar(setProfissional)}
+              vazio={{ valor: TODOS, rotulo: 'Todos os profissionais' }}
+            />
+          )}
         </div>
 
         {lista.isLoading ? (
@@ -373,6 +376,8 @@ function LinhaMovimentacao({
 function DialogoMovimentacao({ tipoInicial, aoFechar }: { tipoInicial: TipoMovimentacao; aoFechar: () => void }) {
   const criar = useCriarMovimentacao();
   const contas = useContasFinanceiras();
+  const { data: me } = useMe();
+  const ehAdmin = me?.papel === 'admin';
   const [tipo, setTipo] = useState<TipoMovimentacao>(tipoInicial);
   const [data, setData] = useState(hojeIso());
   const [valor, setValor] = useState('');
@@ -478,9 +483,12 @@ function DialogoMovimentacao({ tipoInicial, aoFechar }: { tipoInicial: TipoMovim
             />
           </Campo>
           <div className="grid gap-4 sm:grid-cols-2">
-            <Campo rotulo="Profissional (opcional)" dica={tipo === 'entrada' ? 'Entradas vinculadas entram no repasse.' : undefined}>
-              <SelectProfissional valor={profissional} onChange={setProfissional} vazio={{ valor: NENHUM, rotulo: 'Nenhum' }} />
-            </Campo>
+            {/* Recepção vincula profissional só pelo recebimento da consulta (vem do agendamento). */}
+            {ehAdmin && (
+              <Campo rotulo="Profissional (opcional)" dica={tipo === 'entrada' ? 'Entradas vinculadas entram no repasse.' : undefined}>
+                <SelectProfissional valor={profissional} onChange={setProfissional} vazio={{ valor: NENHUM, rotulo: 'Nenhum' }} />
+              </Campo>
+            )}
             <Campo rotulo="Paciente (opcional)">
               <BuscaPaciente valor={paciente} onChange={setPaciente} />
             </Campo>

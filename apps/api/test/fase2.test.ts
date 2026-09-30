@@ -3,7 +3,7 @@
  * imutabilidade dos documentos clínicos, catálogo de recursos e WhatsApp sem paciente cadastrado.
  * Cria os próprios dados (nomes/documentos únicos) e apaga no fim — não limpa o banco.
  */
-import { randomUUID } from 'node:crypto';
+import { createCipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PeriodoLimite } from '@prisma/client';
 import { buildApp, type App } from '../src/app';
@@ -121,6 +121,28 @@ describe('utils/cripto', () => {
     partes[3] = Buffer.from('xxxxxxx').toString('base64');
     expect(() => descriptografar(partes.join(':'), outraChave)).toThrow(ErroCripto);
     expect(() => descriptografar('texto-puro')).toThrow(ErroCripto);
+  });
+
+  it('recusa tag de autenticação truncada e IV fora de 12 bytes (auditoria B5)', () => {
+    const chaveBuf = Buffer.from(outraChave, 'hex');
+    // Cifrado "válido" com tag GCM de 4 bytes: o Node aceitaria sem authTagLength.
+    const iv = randomBytes(12);
+    const c = createCipheriv('aes-256-gcm', chaveBuf, iv, { authTagLength: 4 });
+    const dados = Buffer.concat([c.update('segredo', 'utf8'), c.final()]);
+    const curto = ['v1', iv.toString('base64'), c.getAuthTag().toString('base64'), dados.toString('base64')].join(':');
+    expect(() => descriptografar(curto, outraChave)).toThrow(ErroCripto);
+
+    // Tag de 16 bytes, mas cortada para 8 no texto armazenado.
+    const partes = criptografar('segredo', outraChave).split(':');
+    partes[2] = Buffer.from(partes[2]!, 'base64').subarray(0, 8).toString('base64');
+    expect(() => descriptografar(partes.join(':'), outraChave)).toThrow(ErroCripto);
+
+    // IV de 16 bytes com tag completa.
+    const iv16 = randomBytes(16);
+    const c16 = createCipheriv('aes-256-gcm', chaveBuf, iv16);
+    const d16 = Buffer.concat([c16.update('segredo', 'utf8'), c16.final()]);
+    const ivLongo = ['v1', iv16.toString('base64'), c16.getAuthTag().toString('base64'), d16.toString('base64')].join(':');
+    expect(() => descriptografar(ivLongo, outraChave)).toThrow(ErroCripto);
   });
 
   it('mascara sem revelar o segredo', () => {

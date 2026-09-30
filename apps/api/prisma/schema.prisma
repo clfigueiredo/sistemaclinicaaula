@@ -476,6 +476,9 @@ model Cobranca {
   metodo         MetodoCobranca?
   link_pagamento String?
   pago_em        DateTime?
+  /// Ambiente do gateway quando a cobrança foi gerada (null = anterior à migration `seguranca_fase2`, preenchido
+  /// com o ambiente do gateway naquele momento). Pagamento de cobrança sandbox com gateway em produção é ignorado.
+  ambiente       AmbienteGateway?
   /// Último payload relevante do gateway (auditoria).
   payload        Json?
   criado_em      DateTime          @default(now())

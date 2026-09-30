@@ -410,3 +410,33 @@ describe('retornos — vínculo na hora ao criar agendamento', () => {
     expect((await C.db.retorno.findUniqueOrThrow({ where: { id: retorno.id } })).status).toBe('pendente');
   });
 });
+
+describe('retornos — segurança (auditoria B6)', () => {
+  it('agendamento vinculado precisa ser do mesmo paciente E do mesmo profissional do retorno', async () => {
+    const pac = await A.db.paciente.create({ data: { nome: `Paciente B6 ${sufixo}` } });
+    const origem = await A.agendamento(pac.id, profId, '2026-09-02T13:00:00Z', 'atendido');
+    const ret = await A.db.retorno.create({
+      data: { paciente_id: pac.id, profissional_id: profId, agendamento_origem_id: origem.id, data_prevista: new Date('2026-10-02T00:00:00Z') },
+    });
+    const deOutroProf = await A.agendamento(pac.id, prof2Id, '2026-10-03T13:00:00Z');
+    for (const quem of [prof, admin]) {
+      const r = await app.inject({
+        method: 'PATCH',
+        url: `/retornos/${ret.id}/status`,
+        headers: quem.h,
+        payload: { status: 'agendado', agendamento_retorno_id: deOutroProf.id },
+      });
+      expect(r.statusCode).toBe(404);
+    }
+    expect((await A.db.retorno.findUniqueOrThrow({ where: { id: ret.id } })).status).toBe('pendente');
+
+    const doMesmo = await A.agendamento(pac.id, profId, '2026-10-04T13:00:00Z');
+    const ok = await app.inject({
+      method: 'PATCH',
+      url: `/retornos/${ret.id}/status`,
+      headers: prof.h,
+      payload: { status: 'agendado', agendamento_retorno_id: doMesmo.id },
+    });
+    expect(ok.statusCode, ok.body).toBe(200);
+  });
+});

@@ -300,8 +300,9 @@ describe('documentos — emissão, imutabilidade, PDF e LGPD', () => {
     expect(semVinculo.statusCode).toBe(403);
   });
 
-  it('pré-visualização devolve PDF sem gravar documento', async () => {
+  it('pré-visualização devolve PDF sem gravar documento e registra log LGPD (B7)', async () => {
     const antes = await A.db.documentoClinico.count();
+    const logsAntes = await logs('previa', pacienteId);
     const r = await app.inject({
       method: 'POST',
       url: '/documentos/previa',
@@ -311,6 +312,7 @@ describe('documentos — emissão, imutabilidade, PDF e LGPD', () => {
     expect(r.statusCode, r.body).toBe(200);
     expect(r.rawPayload.subarray(0, 5).toString('latin1')).toBe('%PDF-');
     expect(await A.db.documentoClinico.count()).toBe(antes);
+    expect(await logs('previa', pacienteId)).toBe(logsAntes + 1);
   });
 
   it('isolamento: outra clínica não enxerga o documento nem o paciente', async () => {

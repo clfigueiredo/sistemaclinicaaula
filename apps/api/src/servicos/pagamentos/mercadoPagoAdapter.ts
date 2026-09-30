@@ -49,6 +49,11 @@ type PagamentoMP = {
   date_approved?: string | null;
 };
 
+/** Marcador gravado no `description` do cliente do Mercado Pago (identifica a clínica dona). */
+export function descricaoCliente(clinicaId: string) {
+  return `Clínica ${clinicaId}`;
+}
+
 export function criarAdaptadorMercadoPago(config: ConfigGateway): GatewayPagamento {
   if (config.credenciais.provedor !== 'mercado_pago') {
     throw new ErroGatewayPagamento('Credenciais do Mercado Pago inválidas.', 'mercado_pago');
@@ -111,8 +116,16 @@ export function criarAdaptadorMercadoPago(config: ConfigGateway): GatewayPagamen
           'mercado_pago',
         );
       }
-      const busca = await chamar<{ results?: { id: string }[] }>(`/v1/customers/search?email=${encodeURIComponent(dados.email)}`);
-      if (busca.results?.[0]) return { clienteExternoId: busca.results[0].id };
+      // O id do cliente fica em `assinaturas.cliente_externo_id` (por clínica) e é reaproveitado pelo serviço;
+      // aqui só chegamos na primeira vez (ou ao trocar de gateway). A busca por e-mail é só um fallback e SÓ
+      // reaproveita cliente criado para ESTA clínica (marcador `description`) — e-mail igual de outra clínica
+      // (ou cadastrado por terceiros) nunca é reaproveitado.
+      const marcador = descricaoCliente(dados.clinicaId);
+      const busca = await chamar<{ results?: { id: string; description?: string | null }[] }>(
+        `/v1/customers/search?email=${encodeURIComponent(dados.email)}`,
+      );
+      const daClinica = busca.results?.find((c) => c.description === marcador);
+      if (daClinica) return { clienteExternoId: daClinica.id };
       const doc = dados.documento.replace(/\D/g, '');
       const criado = await chamar<{ id: string }>('/v1/customers', {
         method: 'POST',
@@ -120,7 +133,7 @@ export function criarAdaptadorMercadoPago(config: ConfigGateway): GatewayPagamen
           email: dados.email,
           first_name: dados.nome.slice(0, 100),
           identification: { type: doc.length > 11 ? 'CNPJ' : 'CPF', number: doc },
-          description: `Clínica ${dados.clinicaId}`,
+          description: marcador,
         },
       });
       return { clienteExternoId: criado.id };

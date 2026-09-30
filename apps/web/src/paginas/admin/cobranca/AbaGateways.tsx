@@ -250,7 +250,13 @@ function DetalheGateway({ gateway }: { gateway: GatewayConfigurado }) {
   function executarConfirmacao() {
     const fechar = { onSettled: () => setConfirmar(null), onError: (e: unknown) => toast.error(mensagemDeErro(e)) };
     if (confirmar === 'ativar') {
-      ativar.mutate(p, { ...fechar, onSuccess: () => toast.success(`${gateway.nome} ativado. As próximas cobranças usam este gateway.`) });
+      ativar.mutate(p, {
+        ...fechar,
+        onSuccess: (r) => {
+          toast.success(`${gateway.nome} ativado. As próximas cobranças usam este gateway.`);
+          if (r.aviso) toast.warning('Gateway em sandbox', { description: r.aviso, duration: 15_000 });
+        },
+      });
     } else if (confirmar === 'desativar') {
       desativar.mutate(p, { ...fechar, onSuccess: () => toast.success(`${gateway.nome} desativado.`) });
     } else if (confirmar === 'remover_webhook') {
@@ -516,13 +522,25 @@ function DetalheGateway({ gateway }: { gateway: GatewayConfigurado }) {
         }
         descricao={
           confirmar === 'ativar'
-            ? `Só um gateway fica ativo: ${gateway.nome} passa a gerar todas as novas cobranças (manuais e automáticas). Os outros são desativados; as cobranças já geradas continuam no gateway de origem.`
+            ? `Só um gateway fica ativo: ${gateway.nome} passa a gerar todas as novas cobranças (manuais e automáticas). Os outros são desativados; as cobranças já geradas continuam no gateway de origem.${
+                gateway.ambiente === 'sandbox'
+                  ? ' ATENÇÃO: este gateway está em SANDBOX (teste) — as faturas das clínicas com cobrança automática serão de teste e nenhum pagamento real será recebido. Confirme só se for intencional.'
+                  : ''
+              }`
             : confirmar === 'desativar'
               ? 'Sem gateway ativo nenhuma cobrança nova é gerada. Webhooks das cobranças já emitidas continuam sendo aceitos.'
               : `Sem o segredo, todos os webhooks do ${gateway.nome} passam a ser recusados.`
         }
-        perigo={confirmar !== 'ativar'}
-        textoConfirmar={confirmar === 'ativar' ? 'Ativar' : confirmar === 'desativar' ? 'Desativar' : 'Remover'}
+        perigo={confirmar !== 'ativar' || gateway.ambiente === 'sandbox'}
+        textoConfirmar={
+          confirmar === 'ativar'
+            ? gateway.ambiente === 'sandbox'
+              ? 'Ativar em sandbox'
+              : 'Ativar'
+            : confirmar === 'desativar'
+              ? 'Desativar'
+              : 'Remover'
+        }
         carregando={ativar.isPending || desativar.isPending || salvar.isPending}
         aoConfirmar={executarConfirmacao}
       />
