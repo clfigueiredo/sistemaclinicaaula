@@ -17,6 +17,20 @@ Stack de produção (`docker-compose.prod.yml`, arquivo completo — não é ove
 Só o Caddy publica portas (80/443 e 443/udp). O `docker-compose.yml` da raiz é **só para desenvolvimento**
 (portas em `127.0.0.1`, WPPConnect com chaves de exemplo) — não use na VPS.
 
+## 0. Instalação automática (recomendado)
+
+Numa VPS Ubuntu/Debian limpa, com o DNS `A` do domínio já apontando para ela, rode como root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/clfigueiredo/sistemaclinicaaula/main/deploy/instalar-vps.sh | bash
+```
+
+O script (`deploy/instalar-vps.sh`) **só pergunta o domínio** e faz o resto: instala o Docker, clona o projeto em
+`/opt/sistema-clinica`, gera o `.env.prod` com todos os segredos aleatórios (`openssl rand -hex 32`), libera
+22/80/443 no `ufw`, sobe o compose de produção, cria o super admin com senha aleatória (salva em
+`/root/sistema-clinica-admin.txt`) e agenda o backup diário. Rodar de novo é seguro: um `.env.prod` existente
+mantém os segredos e só tem o domínio atualizado. As seções abaixo descrevem o processo manual equivalente.
+
 ## 1. Preparar a VPS
 
 1. Ubuntu/Debian atualizado, Docker Engine + plugin `docker compose` instalados.
