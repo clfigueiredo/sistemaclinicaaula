@@ -6,10 +6,15 @@ SaaS de gestão para clínicas particulares. Várias clínicas usam o mesmo sist
 **totalmente isolada** (multi-tenant por `clinica_id`). O dono do SaaS gerencia planos e
 clínicas num painel super admin; cada plano libera/limita recursos do sistema.
 
-Documentação completa da arquitetura e do modelo de dados: **`docs/ARQUITETURA.md`** —
-ler antes de implementar qualquer módulo. Setup do ambiente local: **`docs/SETUP_LOCAL.md`**.
-**Fase 2 do produto** (financeiro, agendamento online, lista de espera, documentos PDF, retornos, dashboard,
-cobrança do SaaS): contratos por módulo, donos de arquivo e integrações em **`docs/FASE2.md`**.
+**MVP e Fase 2 do produto estão concluídos** (ver "Status atual" no fim). Documentação:
+
+| Documento | Conteúdo |
+|---|---|
+| `docs/ARQUITETURA.md` | visão geral, planos/recursos, papéis, **modelo de dados completo**, fluxos (WhatsApp, agendamento online, cobrança) — ler antes de mexer em qualquer módulo |
+| `docs/FASE2.md` | contratos (rotas, payloads, regras) dos módulos da fase 2: financeiro, agendamento online, lista de espera, documentos PDF, retornos, dashboard e cobrança do SaaS |
+| `docs/SETUP_LOCAL.md` | subir do zero no Windows, roteiros de teste manual, solução de problemas |
+| `docs/DEPLOY.md` | produção na VPS (compose de produção, Caddy, segredos, webhooks, backup) |
+| `README.md` | resumo de uma página |
 
 ## Idioma
 
@@ -38,7 +43,8 @@ cobrança do SaaS): contratos por módulo, donos de arquivo e integrações em *
 
 ```
 Sistema_Clinica/
-├── CLAUDE.md
+├── CLAUDE.md / README.md
+├── iniciar-sistema.bat       # atalho Windows: docker compose up -d + npm run dev, log em logs/dev.log
 ├── docker-compose.yml        # DEV: postgres 16, redis 7 (com senha), wppconnect — portas só em 127.0.0.1
 ├── docker-compose.prod.yml   # PRODUÇÃO: + api, worker, caddy; sem portas internas; segredos obrigatórios
 ├── deploy/                   # Dockerfile.api, Dockerfile.web (build do web + Caddy), Caddyfile, backup.sh
@@ -47,7 +53,7 @@ Sistema_Clinica/
 ├── docs/ (ARQUITETURA.md, SETUP_LOCAL.md, DEPLOY.md, FASE2.md)
 ├── apps/api/                 # Fastify 5 + Zod 4 + Prisma 6 (ESM, TypeScript estrito, tsx watch / tsup)
 │   ├── prisma/schema.prisma  # modelo de dados completo + migrations + seed.ts
-│   ├── test/                 # vitest (banco clinica_teste)
+│   ├── test/                 # vitest (banco clinica_teste) — 18 arquivos, um por módulo + tenant/recursos/segurança
 │   └── src/
 │       ├── app.ts            # buildApp() — exportado para testes (app.inject)
 │       ├── server.ts         # sobe a API (+ workers se EXECUTAR_WORKERS=true)
@@ -56,12 +62,18 @@ Sistema_Clinica/
 │       ├── lib/prisma.ts     # prisma CRU (só admin/auth/workers/seed)
 │       ├── plugins/          # auth.ts, tenant.ts, recursos.ts, erros.ts
 │       ├── utils/            # erros.ts (ErroNegocio, ou404), logAcesso.ts, senha.ts, documento.ts,
-│       │                     # cripto.ts (AES-256-GCM), slug.ts
-│       ├── servicos/         # filas.ts (BullMQ/Redis), whatsapp/*, pagamentos/* (gateways do SaaS),
+│       │                     # cripto.ts (AES-256-GCM), slug.ts, ip.ts (chave de IP; IPv6 por /64)
+│       ├── servicos/         # filas.ts (BullMQ/Redis), whatsapp/* (service, adapters, envio, mensagens,
+│       │                     # respostas, lembretes), pagamentos/* (Asaas, Stripe, Mercado Pago + fábrica),
 │       │                     # configuracaoClinica.ts, financeiroComum.ts
-│       ├── workers/index.ts  # registro dos workers BullMQ (lembretes, envio + 4 jobs diários da fase 2)
+│       ├── workers/          # index.ts registra: envio WhatsApp, lembretes (09:00), recorrências (06:00),
+│       │                     # cobranças (07:00), retornos (09:30), expirar solicitações (:15 de cada hora)
 │       └── modulos/<nome>/index.ts   # um plugin por domínio (registrados em modulos/index.ts)
+│           # MVP: auth, me, admin-planos, admin-clinicas, profissionais, convenios, usuarios, pacientes,
+│           #      prontuario, agendamentos, whatsapp
+│           # Fase 2: financeiro, agendamento-online, lista-espera, documentos, retornos, dashboard, admin-cobranca
 └── apps/web/                 # React 19 + Vite + Tailwind 4 + shadcn/ui + TanStack Query + React Router 7
+    ├── e2e/smoke/            # Playwright: 8 specs / 13 testes (01-* a 04-* MVP, 05-* a 08-* fase 2)
     └── src/
         ├── main.tsx          # providers (QueryClient, AuthProvider, Tooltip, Toaster)
         ├── rotas/            # index.tsx (router COMPLETO, lazy) + navegacao.ts (menus e papéis)
@@ -84,7 +96,7 @@ Sistema_Clinica/
    `podeVerDadosClinicos` de `modulos/prontuario/acesso.ts` (regra de vínculo abaixo).
 5. **WhatsApp desacoplado:** o resto do sistema só fala com `whatsappService`; nada de chamar a API do WPPConnect direto de outro módulo (para poder trocar pela API oficial da Meta depois).
 6. **Envio de WhatsApp sempre pela fila**, com intervalo aleatório (20–40 s) por sessão/clínica, e só para pacientes com `aceita_whatsapp = true`.
-7. **Log de acesso** (`logs_acesso`) ao visualizar/criar registros de prontuário (LGPD).
+7. **Log de acesso** (`logs_acesso`) ao visualizar/criar registros de prontuário, baixar anexos e listar/ver/emitir/baixar documentos clínicos (LGPD).
 8. Nunca commitar `.env` nem credenciais.
 
 ## Decisões de negócio já tomadas
@@ -92,7 +104,11 @@ Sistema_Clinica/
 - Entidade genérica **`profissionais`** (médico é um profissional; campo `registro` serve para CRM/CRO/CRP…).
 - **Convênio:** apenas seleção do nome (lista por clínica); sem faturamento TISS. Agendamento é `particular` ou `convenio`.
 - **Auto-cadastro** público cria clínica + usuário admin + assinatura no plano marcado como `plano_cadastro`.
-- **Teste grátis:** todas as funções, limitado a **1** profissional, recepcionista, agendamento e anexo, e **3** mensagens WhatsApp (lembrete + confirmação/cancelamento cabem no teste); limites **totais**, **sem prazo** de expiração.
+- **Teste grátis** (plano do seed marcado como `plano_cadastro`): todas as funções, inclusive as seis da fase 2,
+  limitado a **1** profissional, 1 usuário de equipe, 1 agendamento e 1 anexo, e **3** mensagens WhatsApp
+  (lembrete + confirmação/cancelamento cabem no teste); limites **totais**, **sem prazo** de expiração
+  (`expira_em = null`). A conversão acontece quando a clínica bate os limites e o super admin troca o plano.
+- Planos criados pelo super admin nascem com os recursos da fase 2 **desligados** até ele liberar.
 - **Limite de equipe** (`max_recepcionistas`, "usuários de equipe"): recepções ativas + admins ativos
   **adicionais**. Só o **admin principal** (o admin ativo mais antigo — o do auto-cadastro) não conta.
   Admin pode estar vinculado a um profissional.
@@ -108,22 +124,41 @@ Sistema_Clinica/
 - Mesmo profissional em duas clínicas = **dois cadastros independentes**.
 - Cada clínica conecta **o próprio número** de WhatsApp (uma sessão WPPConnect por clínica).
 - Lembrete enviado **1 dia antes**; resposta `1` confirma, `2` cancela e avisa a recepção.
-- **Agendamento online — anti-abuso:** além do limite por telefone (configurável), máx. 3 solicitações pendentes
-  futuras por IP (IPv6 por /64, `utils/ip.ts` — mesma chave do rate limit) e 10 por profissional/dia; contagens sob
-  advisory lock. **Confirmação da aprovação:** paciente existente recebe no WhatsApp do cadastro; o telefone da
-  solicitação só recebe se for o mesmo do cadastro (com o nome informado na solicitação); senão, aviso
-  `telefone_divergente` à recepção.
-- **Cobrança do SaaS:** estorno/chargeback de cobrança paga recalcula `expira_em` pelo último ciclo pago (sem
-  nenhum ⇒ assinatura `vencida`) e `estornada` conta como dívida na tolerância até o super admin cancelá-la;
-  pagar cobrança cancelada não reativa; `cobrancas.ambiente` guarda sandbox/produção e pagamento de cobrança
-  sandbox com gateway em produção é ignorado. Detalhes em `docs/FASE2.md` §12.
+- **Agendamento online** (`/agendar/:slug`, público): o paciente só **solicita**; a solicitação fica `pendente`
+  até a recepção/admin **aprovar** (cria paciente se preciso + agendamento, consome `max_agendamentos`) ou
+  recusar; pendentes cujo horário passou viram `expirada` (job de hora em hora). Paciente é casado pelo **CPF**;
+  telefone é só sugestão. **Anti-abuso:** honeypot, rate limit, limite por telefone (configurável, padrão 2),
+  máx. **3** pendentes futuras por IP (IPv6 por /64, `utils/ip.ts` — mesma chave do rate limit) e **10** por
+  profissional/dia; contagens sob advisory lock. **Confirmação da aprovação:** paciente novo ⇒ telefone da
+  solicitação; paciente existente ⇒ WhatsApp **do cadastro**; o telefone da solicitação só recebe se for o mesmo
+  do cadastro; senão, aviso `telefone_divergente` à recepção.
+- **Lista de espera / retornos:** oferta de horário e convite de retorno saem pelo WhatsApp (só com
+  consentimento); agendar de fato é sempre pela agenda normal (`/agenda?novo=1&...`). Retorno vira `agendado`
+  automaticamente ao criar agendamento do mesmo paciente+profissional na janela.
+- **Financeiro:** movimentação **nunca é apagada** nem tem valor/tipo/data/conta alterados — correção é
+  **estorno** (movimentação inversa, uma por original); "vencido" é derivado; data futura só como título.
+  **Recepção** lança, recebe e dá baixa, mas **não vê relatórios, recorrências, repasses nem configurações**
+  (nem movimentações de repasse); profissional vê só os próprios recebimentos/repasses.
+- **Cobrança do SaaS** (super admin): **um gateway ativo** por vez (Asaas, Stripe ou Mercado Pago), credenciais
+  cifradas. O **nosso worker** gera uma cobrança avulsa por mês (até 10 dias antes do vencimento; não usamos a
+  assinatura nativa do gateway); atribuir plano pago com gateway ativo liga a cobrança automática. Cobrança em
+  aberto além de `dias_tolerancia` ⇒ assinatura **`vencida`** (somente leitura); o pagamento (webhook) volta a
+  `ativa` e **avança `expira_em`** até o fim do ciclo pago + tolerância. **Estorno/chargeback** de cobrança paga
+  recalcula `expira_em` pelo último ciclo ainda pago (sem nenhum ⇒ `vencida`) e `estornada` conta como dívida
+  até o super admin **cancelá-la** (perdão). Pagar cobrança cancelada não reativa. `cobrancas.ambiente` guarda
+  sandbox/produção — pagamento de cobrança sandbox com gateway já em produção é ignorado. `bloqueada` é só
+  manual. Detalhes em `docs/FASE2.md` §7 e §12.
 
 ## Comandos
+
+Jeito mais simples (Windows): **duplo clique em `iniciar-sistema.bat`** — sobe os containers e roda
+`npm run dev` numa janela "Sistema Clinica - DEV" (não feche), com log em `logs/dev.log`. Acesse
+http://localhost:5173 depois de 1–2 min.
 
 Todos na **raiz** do projeto (passo a passo completo em `docs/SETUP_LOCAL.md`):
 
 ```bash
-docker compose up -d        # postgres (5432), redis (6379, com senha), wppconnect (21465) — só em 127.0.0.1
+docker compose up -d        # (ou npm run docker:up) postgres (5432), redis (6379, com senha), wppconnect (21465) — só em 127.0.0.1
 npm install                 # raiz + apps/api + apps/web (postinstall) + prisma generate
 npm run db:migrate          # prisma migrate dev (cria/aplica migrations)
 npm run db:seed             # seed idempotente (super admin, recursos, planos, clínica demo)
@@ -132,12 +167,17 @@ npm run dev:api | dev:web   # só um dos dois
 npm run dev:worker          # workers em processo separado (use com EXECUTAR_WORKERS=false)
 npm run typecheck           # tsc da API e do Web
 npm run build               # tsup (apps/api/dist) + vite build (apps/web/dist)
-npm test                    # vitest da API (banco clinica_teste, criado automaticamente) — ~15 min no SMB
+npm test                    # vitest da API (banco clinica_teste, criado/migrado automaticamente) — ~15 min no SMB
 npx vitest run test/x.test.ts   # (em apps/api, com `npx dotenv -e ../../.env --`) um arquivo só
 npm run e2e                 # smoke test E2E (Playwright, apps/web/e2e/smoke) — exige `npm run dev` rodando
 npm run db:deploy           # aplica migrations sem o `migrate dev` (útil quando ele trava no SMB)
+npm run db:generate         # prisma generate (com a API PARADA — ver dicas abaixo)
 npm run db:studio           # Prisma Studio
 ```
+
+Última execução registrada: **243 testes em 18 arquivos** (vitest) e **13 testes E2E** em 8 specs, todos passando.
+
+### Dicas do ambiente (disco de rede SMB)
 
 - O web chama a API por `/api/*` (proxy do Vite remove o `/api`). Rotas da API **não** têm prefixo `/api`.
 - No disco de rede a API leva ~30–90 s para subir em dev (e para reiniciar no `tsx watch`). É normal.
@@ -150,9 +190,15 @@ npm run db:studio           # Prisma Studio
   rode `npm run db:deploy` e confira drift com o mesmo `migrate diff ... --exit-code` ("No difference detected").
 - `prisma generate` falha com `EPERM ... query_engine-windows.dll.node` se a API estiver rodando (a DLL fica
   travada): pare o `npm run dev`, gere e suba de novo.
+- `tsx watch` reinicia a API a cada arquivo salvo; editando muitos arquivos seguidos ela fica reiniciando em
+  loop (cada subida ~30–90 s). Termine as edições e espere, ou pare o dev e suba de novo no fim.
+- Se o usuário estiver com o sistema rodando (janela "Sistema Clinica - DEV"), **não mate processos** nem rode
+  migrations/`prisma generate` sem combinar antes.
 - E2E: na primeira vez instale o browser: `cd apps/web && npx playwright install chromium`.
   Screenshots e `relatorio.txt` (erros de console e HTTP 4xx/5xx) em `apps/web/e2e/capturas/` (ignorado no git).
   Na primeira carga o Vite no SMB é lento (1–2 min por página nova) — os timeouts do Playwright já consideram isso.
+  Artefatos do Playwright vão para `%TEMP%/sistema-clinica-e2e` (fora do SMB); a pasta antiga
+  `apps/web/e2e/resultados/` ficou com ACL travada — é ignorada pelo git e pelo Playwright, não tente apagá-la.
 
 ### Credenciais do seed (apenas desenvolvimento)
 
@@ -163,8 +209,9 @@ npm run db:studio           # Prisma Studio
 | Clínica Demo — recepção | recepcao@demo.local | demo123 |
 | Clínica Demo — profissional (Dra. Ana Souza) | profissional@demo.local | demo123 |
 
-A Clínica Demo está no plano **Profissional** (assinatura ativa, limites altos). Para testar o plano
-de **Teste grátis** (tudo limitado a 1), crie uma clínica nova em `/cadastro`.
+A Clínica Demo (slug `clinica-demo`, agendamento online ligado) está no plano **Profissional** (assinatura
+ativa, limites altos, fase 2 habilitada). Para testar o **Teste grátis** (1 de cada + 3 mensagens), crie uma
+clínica nova em `/cadastro`. O seed é idempotente e **nunca** deve rodar em produção.
 
 ## Convenções para módulos
 
@@ -235,7 +282,7 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
 - **Valide FKs recebidas no body** buscando pelo `request.db` antes de gravar:
   `ou404(await request.db.paciente.findUnique({ where: { id: body.paciente_id } }), 'Paciente não encontrado.')`.
 - SQL cru (`$queryRaw`) não é filtrado — filtre `clinica_id = request.clinicaId` manualmente.
-- `prisma` cru (`src/lib/prisma.ts`) só em admin, auth, workers, webhook e seed. Um `create` de modelo
+- `prisma` cru (`src/lib/prisma.ts`) só em admin, auth, workers, webhooks, rotas públicas (`/publico/*`) e seed. Um `create` de modelo
   de clínica pelo prisma cru **sem** `clinica_id` falha no banco (falha fechada).
 - `prontuario_registros` é imutável: update/delete lançam `prontuario_imutavel` (extensão) e o banco
   tem trigger. Correção = novo registro com `corrige_registro_id`. `documentos_clinicos` (fase 2) idem, com
@@ -340,7 +387,7 @@ await request.db.$transaction(async (tx) => {
   (sem `/api`). Rotas `/admin*` usam o token do super admin; as demais, o da clínica. 401 ⇒ logout + login;
   403 `limite_atingido`/`recurso_indisponivel`/`assinatura_inativa` ⇒ toast automático. Erros são
   `ErroApi { status, codigo, mensagem, dados, detalhes }`; `mensagemDeErro(e)` para toasts.
-- **Hooks por módulo** em `src/api/<modulo>.ts` (stubs já criados com o padrão comentado): objeto de
+- **Hooks por módulo** em `src/api/<modulo>.ts`: objeto de
   chaves (`chavesX.todos/lista/detalhe`), `useQuery` para leitura, `useMutation` com
   `invalidateQueries` no `onSuccess`. Se a ação consome recurso do plano, invalide também
   `chavesMe.me`. Chaves do super admin começam com `'admin'`.
@@ -348,7 +395,7 @@ await request.db.$transaction(async (tx) => {
   `useMe()` → `Me` (`usuario`, `papel`, `clinica`, `assinatura`, `plano`, `recursos`); `useAdminMe()`;
   `usePodeUsar(codigo)` → `{ pode, motivo, mensagem, limite, uso, restante }` para desabilitar botões
   (`<Button disabled={!pode} title={mensagem}>`). Tipos compartilhados em `src/api/tipos.ts`.
-- **Página**: arquivo em `src/paginas/...` (já declarado no router, lazy, com guard de papel) exportando
+- **Página**: arquivo em `src/paginas/...` (declarado no router `rotas/index.tsx`, lazy, com guard de papel) exportando
   `default`. Estrutura: `<CabecalhoPagina titulo descricao acoes />` + conteúdo; `<Carregando />`,
   `<EstadoVazio />`, `<AvisoLimite codigo />`, `<UsoRecurso codigo />` de `@/componentes/comum`.
   Formulários: `react-hook-form` + `zodResolver` + `Form/FormField/...` de `@/componentes/ui/form`;
@@ -381,42 +428,32 @@ await request.db.$transaction(async (tx) => {
   `MinhasFaturas`) e no detalhe da clínica do super admin (`BlocoCobrancaClinica`) — mapa completo em
   `docs/FASE2.md` §10. Gráficos do dashboard e dos relatórios são SVG/CSS próprios (sem biblioteca de gráficos).
 
-## Status atual
+## Status atual (06/10/2026)
 
-- [x] Levantamento de requisitos e arquitetura (`docs/ARQUITETURA.md`)
-- [x] Instalar Docker Desktop (ver `docs/SETUP_LOCAL.md` — instalação por usuário, PATH OK)
-- [x] Esqueleto do monorepo + docker-compose
-- [x] Schema Prisma + seed (super admin, recursos, plano de teste)
-- [x] Auth (login super admin / usuários da clínica) + auto-cadastro
-- [x] Plugins compartilhados: auth, tenant (`request.db`), recursos/limites, erros, logAcesso + testes
-- [x] Web: base (tema, shadcn, router completo, guards, layouts, login/cadastro, onboarding, configurações)
-- [x] Painel admin: planos, recursos, clínicas
-- [x] Clínica: profissionais + grade de horários + convênios
-- [x] Usuários da clínica
-- [x] Pacientes
-- [x] Agenda
-- [x] Prontuário + anexos
-- [x] WhatsApp: conexão QR, lembrete, confirmação, avisos à recepção (sino)
-- [x] Integração (fase 3): migration `ajustes_integracao`, onboarding real, QA E2E (Playwright) dos 5 fluxos
-- [x] Correções de segurança da auditoria: vínculo profissional–paciente, alergias/medicações, WhatsApp com
-      assinatura inativa, limite de equipe (admins adicionais), segredos em produção, TRUST_PROXY, troca de
-      senha (+ invalidação de tokens), profissional inativo, token mascarado no log, bcrypt falso no login,
-      compose de produção + Caddy + backup (`docs/DEPLOY.md`). Testes em `apps/api/test/seguranca.test.ts`.
-- [ ] Pendente: teste manual do WhatsApp com celular real (passo a passo em `docs/SETUP_LOCAL.md`)
-- [ ] Pendente: primeiro deploy na VPS seguindo `docs/DEPLOY.md` (build das imagens ainda não testado numa VPS)
-- [x] Fase 2 do produto — **fundação** (30/09/2026): migration `fase2_produto` (modelos, enums, trigger dos
-      documentos, slugs, recursos novos), seed, envs (`CHAVE_CRIPTOGRAFIA`, `API_URL_PUBLICA`, `WEB_URL_PUBLICA`),
-      `utils/cripto.ts` + `utils/slug.ts`, stubs de módulos/workers/gateways, rotas/menus/stubs do web,
-      contratos em `docs/FASE2.md`, testes em `apps/api/test/fase2.test.ts`
-- [x] Fase 2 do produto — **concluída**: módulos `financeiro`, `agendamento-online`, `lista-espera`,
-      `documentos`, `retornos`, `dashboard` e `admin-cobranca` (+ workers diários e adaptadores Asaas/Stripe/
-      Mercado Pago) implementados em paralelo e integrados: migration `ajustes_fase2` (`titulos.agendamento_id`,
-      opções do gateway em colunas, `assinaturas.metodo_cobranca`), cobrança automática ao atribuir plano pago,
-      faturas em Configurações, bloco de cobrança no detalhe da clínica, agenda pré-preenchida por URL, retorno
-      marcado como agendado na criação do agendamento, QA E2E dos fluxos novos (`apps/web/e2e/smoke/05-*` a `08-*`)
-- [ ] Pendente: testar a cobrança com um gateway real em sandbox + túnel (passo a passo em `docs/SETUP_LOCAL.md`)
-- [x] Correções de segurança da auditoria da fase 2 (migration `seguranca_fase2`): anti-abuso do agendamento
-      online (IP//64, teto por profissional/dia, advisory locks), envio da confirmação online, estorno/chargeback,
-      pagamento de cobrança cancelada/antiga, ambiente da cobrança, cliente do Mercado Pago por clínica, tag do
-      AES-GCM, CSV injection, recepção sem repasses, log da prévia de documento, retorno só com agendamento do mesmo
-      profissional, GETs do financeiro sem gravar em somente leitura — resumo em `docs/FASE2.md` §12
+**Concluído e commitado** (`git log --oneline`):
+
+- [x] **MVP:** monorepo, schema + seed, auth + auto-cadastro, plugins (tenant, recursos/limites, erros,
+      LGPD), painel super admin (planos, recursos, clínicas, dashboard), profissionais + grade + bloqueios,
+      convênios, usuários, pacientes, agenda, prontuário + anexos, WhatsApp (QR, lembrete, confirmação/
+      cancelamento, avisos à recepção), onboarding, edição dos dados da clínica, QA E2E.
+- [x] **Auditoria de segurança do MVP:** vínculo profissional–paciente, WhatsApp parado com assinatura inativa,
+      limite de equipe com admins adicionais, segredos obrigatórios em produção, `TRUST_PROXY`, troca de senha
+      com invalidação de tokens, compose de produção + Caddy + backup (`docs/DEPLOY.md`).
+- [x] **Fase 2 do produto:** financeiro, agendamento online, lista de espera, documentos PDF, retornos,
+      dashboard e cobrança automática do SaaS (Asaas/Stripe/Mercado Pago) com workers diários — migrations
+      `fase2_produto`, `ajustes_fase2` e `seguranca_fase2`; QA E2E `05-*` a `08-*`; auditoria de segurança da
+      fase 2 (resumo em `docs/FASE2.md` §12).
+- [x] Teste grátis com 3 mensagens WhatsApp e atalho `iniciar-sistema.bat`.
+
+**Pendências reais** (nada disso exige código novo a princípio):
+
+- [ ] Teste manual do WhatsApp com **celular real** (roteiro em `docs/SETUP_LOCAL.md`).
+- [ ] Teste dos gateways em **sandbox com credenciais reais + túnel** (cloudflared) para os webhooks
+      (roteiro em `docs/SETUP_LOCAL.md`).
+- [ ] **Primeiro deploy na VPS** (`docs/DEPLOY.md`) — as imagens Docker ainda não foram construídas numa VPS;
+      criar super admin e planos de produção sem o seed.
+
+**Ideias futuras** (não existem no código): Row Level Security no Postgres como segunda barreira; API oficial
+do WhatsApp (Meta) como alternativa ao WPPConnect (trocar só o adapter de `whatsappService`); assinatura de
+documentos clínicos com certificado digital; faturamento TISS de convênios (hoje fora do escopo); notas fiscais
+da cobrança do SaaS.

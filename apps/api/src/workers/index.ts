@@ -9,7 +9,7 @@
  * Registrados:
  *   - NOMES_FILAS.ENVIO_WHATSAPP (workers/envioWhatsapp.ts): envio com intervalo aleatório 20–40 s por clínica
  *   - NOMES_FILAS.LEMBRETES (workers/lembretes.ts): job diário 09:00 que enfileira os lembretes de amanhã
- *   Fase 2 do produto (stubs no-op até os módulos donos implementarem — ver docs/FASE2.md):
+ *   Fase 2 do produto (implementados — ver docs/FASE2.md):
  *   - FINANCEIRO_RECORRENCIAS (workers/recorrenciasFinanceiras.ts, dono: financeiro) diário 06:00
  *   - RETORNOS (workers/retornos.ts, dono: retornos) diário 09:30
  *   - SOLICITACOES_AGENDAMENTO (workers/solicitacoesAgendamento.ts, dono: agendamento-online) de hora em hora

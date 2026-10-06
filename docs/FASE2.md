@@ -1,5 +1,10 @@
 # Fase 2 do produto — contratos por módulo
 
+> **Status: CONCLUÍDA** (commits `4ff496f` a `82ab2ef`, 30/09 a 03/10/2026). Todos os módulos abaixo estão
+> implementados, integrados, cobertos por testes (`apps/api/test/*.test.ts`) e pelo E2E (`apps/web/e2e/smoke/05-*`
+> a `08-*`). Este arquivo segue como **referência dos contratos**; o código (cabeçalho de cada
+> `modulos/<nome>/index.ts`) é a fonte da verdade em caso de dúvida.
+>
 > Fundação entregue em 30/09/2026 (migration `20261001000000_fase2_produto`); módulos implementados em paralelo
 > e integrados em seguida (migration `20261002000000_ajustes_fase2`); correções da auditoria de segurança na
 > migration `20261003000000_seguranca_fase2` (resumo na §12). Este documento é o **contrato** entre os
@@ -25,14 +30,14 @@ Padrões obrigatórios (resumo do `CLAUDE.md`):
 - `request.db` (tenant) sempre; valide TODA FK do body com `ou404(await request.db.x.findUnique(...))`.
   Sem nested writes em modelos de clínica. `prisma` cru só em rotas públicas/webhooks/workers/admin.
 - Erros com `ErroNegocio`/`erros.*`; validação Zod no `schema` da rota (mensagens em pt-BR; `z.coerce` em query).
-- Recurso do plano: o stub já registra `exigirRecurso('<codigo>')` para o módulo inteiro.
+- Recurso do plano: cada módulo registra `exigirRecurso('<codigo>')` para o módulo inteiro.
 - WhatsApp **só** via `enfileirarMensagem` (seção 8), depois do commit da transação.
 - Datas com hora em UTC (`DateTime`); datas **sem hora** (`@db.Date`: vencimentos, `movimentacoes.data`,
   `retornos.data_prevista`) trafegam como `'YYYY-MM-DD'` e são gravadas como meia-noite UTC
   (`dataSemHora`/`paraDataIso`/`hojeNoFuso` em `src/servicos/financeiroComum.ts`). "Hoje" = fuso da clínica.
 - Valores monetários: body em `number` (reais, 2 casas); respostas `Decimal` saem como string (`"150.00"`).
 - Paginação: `?pagina=1&por_pagina=20` ⇒ `{ itens, total, pagina, porPagina }` (tipo `Paginado<T>` do web).
-- Front: hooks em `src/api/<modulo>.ts` (chaves já definidas no stub), páginas já roteadas com guard de
+- Front: hooks em `src/api/<modulo>.ts` (chaves `chavesX.*`), páginas roteadas com guard de
   papel e de recurso; `toast` do sonner; `usePodeUsar`/`AvisoLimite` para limites.
 - Testes: crie dados com nomes/documentos únicos e apague no fim (veja `test/fase2.test.ts`). Clínica com
   `documentos_clinicos` só pode ser apagada numa transação com `SET LOCAL app.permitir_exclusao_prontuario = 'on'`.
@@ -79,8 +84,8 @@ receberam as linhas novas **desabilitadas** (migration + seed).
 
 **Tabelas:** `contas_financeiras`, `categorias_financeiras`, `movimentacoes_financeiras`, `titulos`,
 `recorrencias`, `profissionais.percentual_repasse` (0–100, null = sem repasse).
-**Arquivos do módulo:** API `src/modulos/financeiro/*`, `src/workers/recorrenciasFinanceiras.ts` (implementar
-`processarRecorrencias`); web `src/api/financeiro.ts`, `src/paginas/clinica/financeiro/*`,
+**Arquivos do módulo:** API `src/modulos/financeiro/*`, `src/workers/recorrenciasFinanceiras.ts`
+(`processarRecorrencias`); web `src/api/financeiro.ts`, `src/paginas/clinica/financeiro/*`,
 `src/paginas/clinica/agenda/RecebimentoConsulta.tsx`.
 
 **Papéis:** admin tudo · recepção: contas (leitura), categorias (leitura), movimentações (listar/criar),
@@ -404,15 +409,15 @@ ficam gravadas como mensagens de entrada.
 
 ## 9. Filas e workers
 
-| Fila (`NOMES_FILAS`) | Arquivo | Agenda | Dono | Função a implementar |
+| Fila (`NOMES_FILAS`) | Arquivo | Agenda (`TZ_PADRAO`) | Dono | Função |
 |---|---|---|---|---|
 | `FINANCEIRO_RECORRENCIAS` | `workers/recorrenciasFinanceiras.ts` | 06:00 | financeiro | `processarRecorrencias(dados)` |
 | `RETORNOS` | `workers/retornos.ts` | 09:30 | retornos | `processarRetornos(dados)` |
 | `SOLICITACOES_AGENDAMENTO` | `workers/solicitacoesAgendamento.ts` | :15 de cada hora | agendamento-online | `expirarSolicitacoes(dados)` |
 | `COBRANCAS` | `workers/cobrancas.ts` | 07:00 | admin-cobranca | `processarCobrancas(dados)` |
 
-Todos já registrados em `workers/index.ts` (hoje no-op). `dados` = `{ clinicaId?, data? }` (`JobPorClinica`)
-ou `{ data? }` (`JobCobrancas`). Exporte a lógica de forma testável (sem Redis) como os lembretes.
+Todos registrados em `workers/index.ts` e implementados (lógica em `modulos/<dono>/servico.ts`, testável sem Redis). `dados` = `{ clinicaId?, data? }` (`JobPorClinica`)
+ou `{ data? }` (`JobCobrancas`); `data` (`YYYY-MM-DD`) simula o dia em testes/reprocessamento. Todos são idempotentes.
 
 ## 10. Web — mapa de rotas, menus e pontos de extensão
 

@@ -4,9 +4,10 @@
  * Cria:
  *  - Super admin: admin@sistema.local / admin123
  *  - Catálogo de recursos (tabela `recursos`)
- *  - Plano "Teste grátis" (plano_cadastro = true): tudo limitado a 1, período total, WhatsApp e TODOS os
- *    recursos liga/desliga (financeiro, agendamento online, lista de espera, documentos PDF, retorno, dashboard)
- *  - Plano "Profissional" (exemplo pago): limites maiores, agendamentos/mensagens mensais, fase 2 habilitada
+ *  - Plano "Teste grátis" (plano_cadastro = true): 1 profissional, recepcionista, agendamento e anexo, e 3
+ *    mensagens WhatsApp, período total; WhatsApp e TODOS os recursos liga/desliga habilitados (financeiro,
+ *    agendamento online, lista de espera, documentos PDF, retorno, dashboard)
+ *  - Plano "Profissional" (exemplo pago): limites maiores, agendamentos/mensagens mensais, recursos da Fase 2 habilitados
  *  - Planos criados pelo super admin recebem as linhas dos recursos novos DESABILITADAS (migration + aqui)
  *  - Clínica demo (plano Profissional, assinatura ativa) com:
  *      admin@demo.local / demo123          (admin)

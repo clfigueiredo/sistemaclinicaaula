@@ -1,14 +1,12 @@
 /**
  * Worker da fila NOMES_FILAS.SOLICITACOES_AGENDAMENTO + agendamento do job de hora em hora.
  *
- * DONO: módulo `agendamento-online` (docs/FASE2.md). Já registrado em workers/index.ts — o dono só implementa
- * `expirarSolicitacoes` (e ajusta o CRON se precisar). Use o prisma CRU filtrando clinica_id manualmente (ou
- * `criarDbTenant(clinicaId)`), `assegurarAssinaturaAtiva`/`assinaturaEstaAtiva` e `assegurarRecurso(clinicaId,
- * 'agendamento_online')` antes de agir numa clínica. Idempotente: o job pode rodar mais de uma vez no mesmo dia.
+ * Módulo dono: `agendamento-online` (docs/FASE2.md). Pula clínicas com assinatura inativa (as pendentes delas
+ * expiram na primeira execução após a reativação). Idempotente: o job pode rodar várias vezes.
  *
- * O que fazer:
+ * Regras:
  *   - Solicitações `pendente` cujo `inicio` já passou ⇒ `expirada` (updateMany por clínica).
- *   - (Opcional) nada é enviado ao paciente na expiração.
+ *   - Nada é enviado ao paciente na expiração.
  */
 import type { Job } from 'bullmq';
 import { env } from '../config/env';
