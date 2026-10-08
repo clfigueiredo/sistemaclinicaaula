@@ -21,3 +21,6 @@ github.txt
 # Acessos gerados pelo instalador na VPS (deploy/acessos.sh)
 ACESSOS.txt
 .env.prod*
+
+# Plugin ECC do Claude Code (clonado localmente)
+ECC/

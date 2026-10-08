@@ -13,7 +13,7 @@
 # variáveis DOMINIO_SITE, DOMINIO_APP e DOMINIO_ADMIN.
 #
 # O que faz:
-#   1. Instala Docker (se faltar), git, openssl e curl.
+#   1. Instala Docker (se faltar), Node.js 20 (se faltar ou < 18), git, openssl e curl.
 #   2. Clona o projeto em /opt/sistema-clinica (ou usa o clone de onde o script foi chamado).
 #   3. Gera .env.prod com TODOS os segredos aleatórios (openssl rand -hex 32). Se o .env.prod já existir,
 #      mantém os segredos (trocar CHAVE_CRIPTOGRAFIA/senha do Postgres quebraria os dados) e só atualiza os domínios.
@@ -111,6 +111,18 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 systemctl enable --now docker >/dev/null 2>&1 || true
 docker compose version >/dev/null 2>&1 || erro "plugin 'docker compose' não encontrado."
+
+# Node 20 no host: o sistema roda nos containers e não precisa dele, mas ferramentas de linha de comando
+# (ex.: plugins do Claude Code como o ECC) exigem Node >= 18 — o do apt no Ubuntu 22.04 é o 12.
+VERSAO_NODE="$(node -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/' || true)"
+if [ -z "$VERSAO_NODE" ] || [ "$VERSAO_NODE" -lt 18 ]; then
+  info "Instalando Node.js 20 (encontrado: ${VERSAO_NODE:-nenhum})..."
+  # Os pacotes do Node antigo do Ubuntu (libnode-dev) conflitam com o pacote do NodeSource.
+  apt-get remove -y -qq nodejs npm libnode-dev libnode72 >/dev/null 2>&1 || true
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null
+  apt-get install -y -qq nodejs >/dev/null
+  info "Node.js $(node -v) instalado."
+fi
 
 # DNS: só avisa (o Let's Encrypt falha para o domínio que não apontar para esta VPS).
 IP_VPS="$(curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || true)"
