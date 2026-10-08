@@ -179,8 +179,18 @@ fi
 
 info "Construindo e subindo os containers (pode levar alguns minutos)..."
 # Constrói antes do "up": o worker usa a imagem da API (sistema-clinica-api), que não existe em registry.
-compose build api caddy
-compose up -d
+# Rede instável com o Docker Hub (timeout no download) é comum: cada etapa tenta até 3 vezes.
+tentar() {
+  local n
+  for n in 1 2 3; do
+    "$@" && return 0
+    [ "$n" -lt 3 ] && { aviso "falhou (tentativa $n de 3) — tentando de novo em 15 s..."; sleep 15; }
+  done
+  erro "não foi possível concluir: $*"
+}
+tentar compose pull --ignore-buildable --quiet
+tentar compose build --pull api caddy
+tentar compose up -d
 
 info "Aguardando a API responder..."
 for _ in $(seq 1 60); do
