@@ -25,7 +25,9 @@
 #
 # Variáveis opcionais: DIR_INSTALACAO (padrão /opt/sistema-clinica), REPO_URL, BRANCH (padrão main),
 # EMAIL_ACME (padrão admin@DOMINIO_SITE).
-set -euo pipefail
+set -Eeuo pipefail
+# Nunca sair em silêncio: qualquer falha inesperada mostra a linha.
+trap 'printf "\033[1;31m[erro]\033[0m falha inesperada na linha %s do instalador (código %s).\n" "$LINENO" "$?" >&2' ERR
 
 # Tudo dentro de main(): com "curl ... | bash" o bash lê o script pelo stdin enquanto executa, e qualquer comando
 # que leia o stdin (ex.: docker compose exec) engoliria o resto do script. Assim o arquivo é lido inteiro antes.
@@ -204,7 +206,9 @@ done
 # --- 6. Backup diário ---------------------------------------------------------------------------------------
 chmod +x deploy/backup.sh
 LINHA_CRON="15 3 * * * cd $DIR_INSTALACAO && ./deploy/backup.sh >> /var/log/clinica-backup.log 2>&1"
-( crontab -l 2>/dev/null | grep -vF 'deploy/backup.sh'; echo "$LINHA_CRON" ) | crontab -
+# VPS nova não tem crontab ("crontab -l" falha) — por isso o "|| true".
+CRON_ATUAL="$(crontab -l 2>/dev/null | grep -vF 'deploy/backup.sh' || true)"
+printf '%s\n%s\n' "$CRON_ATUAL" "$LINHA_CRON" | sed '/^$/d' | crontab -
 systemctl enable --now cron >/dev/null 2>&1 || true
 
 # --- 7. Banco inicial e acessos ----------------------------------------------------------------------------
