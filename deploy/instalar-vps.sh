@@ -15,7 +15,8 @@
 #   3. Gera .env.prod com TODOS os segredos aleatórios (openssl rand -hex 32). Se o .env.prod já existir,
 #      mantém os segredos (trocar CHAVE_CRIPTOGRAFIA/senha do Postgres quebraria os dados) e só atualiza o domínio.
 #   4. Libera 22/80/443 no ufw (se instalado), sobe o docker-compose.prod.yml e espera a API responder.
-#   5. Cria o super admin (se ainda não houver) com senha aleatória e agenda o backup diário.
+#   5. Agenda o backup diário e cria o super admin (se ainda não houver) com senha aleatória
+#      (deploy/redefinir-admin.sh — rode-o depois para redefinir a senha).
 #
 # Variáveis opcionais: DIR_INSTALACAO (padrão /opt/sistema-clinica), REPO_URL, BRANCH (padrão main),
 # EMAIL_ACME (padrão admin@DOMINIO), ADMIN_EMAIL (padrão admin@DOMINIO).
@@ -47,7 +48,7 @@ DOMINIO="$(printf '%s' "$DOMINIO" | tr '[:upper:]' '[:lower:]' | sed -E 's#^[a-z
 printf '%s' "$DOMINIO" | grep -Eq '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$' \
   || erro "domínio inválido: '$DOMINIO'."
 EMAIL_ACME="${EMAIL_ACME:-admin@$DOMINIO}"
-ADMIN_EMAIL="${ADMIN_EMAIL:-admin@$DOMINIO}"
+ADMIN_EMAIL_INFORMADO="${ADMIN_EMAIL:-}"
 info "Domínio: $DOMINIO"
 
 # --- 2. Dependências ----------------------------------------------------------------------------------------
@@ -141,26 +142,7 @@ for _ in $(seq 1 60); do
 done
 [ "${API_OK:-0}" = 1 ] || erro "a API não respondeu em 5 minutos. Veja: docker compose -f $COMPOSE_FILE --env-file $ENV_FILE logs api"
 
-# --- 6. Super admin -----------------------------------------------------------------------------------------
-ADMIN_SENHA="$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)"
-RESULTADO_ADMIN="$(compose exec -T -e ADMIN_EMAIL="$ADMIN_EMAIL" -e ADMIN_SENHA="$ADMIN_SENHA" api node -e "
-const { PrismaClient } = require('@prisma/client'); const bcrypt = require('bcryptjs');
-const p = new PrismaClient();
-(async () => {
-  if (await p.usuarioPlataforma.count()) { console.log('existente'); return; }
-  await p.usuarioPlataforma.create({ data: { nome: 'Administrador', email: process.env.ADMIN_EMAIL,
-    senha_hash: await bcrypt.hash(process.env.ADMIN_SENHA, 10) } });
-  console.log('criado');
-})().finally(() => p.\$disconnect());" | tail -n1)"
-
-ARQ_CREDENCIAIS="/root/sistema-clinica-admin.txt"
-if [ "$RESULTADO_ADMIN" = "criado" ]; then
-  umask 077
-  printf 'URL: https://%s/admin/login\nE-mail: %s\nSenha: %s\n' "$DOMINIO" "$ADMIN_EMAIL" "$ADMIN_SENHA" > "$ARQ_CREDENCIAIS"
-  umask 022
-fi
-
-# --- 7. Backup diário ---------------------------------------------------------------------------------------
+# --- 6. Backup diário ---------------------------------------------------------------------------------------
 chmod +x deploy/backup.sh
 LINHA_CRON="15 3 * * * cd $DIR_INSTALACAO && ./deploy/backup.sh >> /var/log/clinica-backup.log 2>&1"
 ( crontab -l 2>/dev/null | grep -vF 'deploy/backup.sh'; echo "$LINHA_CRON" ) | crontab -
@@ -171,12 +153,9 @@ echo
 info "Instalação concluída!"
 echo "  Sistema:      https://$DOMINIO"
 echo "  Painel admin: https://$DOMINIO/admin/login"
-if [ "$RESULTADO_ADMIN" = "criado" ]; then
-  echo "  Super admin:  $ADMIN_EMAIL / $ADMIN_SENHA"
-  echo "                (salvo em $ARQ_CREDENCIAIS — troque a senha e apague o arquivo)"
-else
-  echo "  Super admin:  já existia (senha não alterada)."
-fi
+# Cria o super admin só se ainda não houver nenhum (senha aleatória, mostrada aqui e salva em /root).
+chmod +x deploy/redefinir-admin.sh
+./deploy/redefinir-admin.sh --se-nao-existir ${ADMIN_EMAIL_INFORMADO:+"$ADMIN_EMAIL_INFORMADO"}
 echo "  Segredos:     $DIR_INSTALACAO/$ENV_FILE (guarde uma cópia fora da VPS)"
 echo "  Backup:       diário às 03:15 em /var/backups/sistema-clinica"
 echo

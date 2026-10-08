@@ -83,6 +83,11 @@ No final aparece um resumo como este — **anote a senha**:
 ```
 
 A senha também fica salva em `/root/sistema-clinica-admin.txt` (apague o arquivo depois de anotar).
+Perdeu a senha ou ela não apareceu? Gere uma nova com:
+
+```bash
+cd /opt/sistema-clinica && ./deploy/redefinir-admin.sh
+```
 
 ### 4. Primeira configuração no painel
 
@@ -103,6 +108,7 @@ dc logs -f api worker      # logs da API e dos jobs
 dc logs caddy              # logs do HTTPS/certificado
 dc restart api worker      # reiniciar
 ./deploy/backup.sh         # backup manual agora
+./deploy/redefinir-admin.sh  # nova senha aleatória para o super admin
 ```
 
 **Atualizar para a versão mais nova:** rode o mesmo comando do passo 3 (ou `sudo ./deploy/instalar-vps.sh`
@@ -115,6 +121,7 @@ dentro de `/opt/sistema-clinica`). Ele baixa o código novo, **mantém as senhas
 | Aviso “domínio não resolve” / site sem HTTPS | DNS ainda não aponta para a VPS. Corrija o registro `A`, espere propagar e rode `dc restart caddy`. |
 | Build parou com erro de memória (`Killed`) | VPS com pouca RAM. Use uma de 4 GB ou crie swap: `fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`. |
 | “a API não respondeu em 5 minutos” | Veja `dc logs api` (geralmente migration ou banco ainda subindo) e rode o instalador de novo. |
+| Senha do super admin não apareceu / esqueci | `cd /opt/sistema-clinica && ./deploy/redefinir-admin.sh` gera uma senha nova e mostra na tela. |
 | `/cadastro` dá erro | Falta marcar um plano como **plano de cadastro** no painel admin. |
 
 > **Importante:** guarde uma cópia do `/opt/sistema-clinica/.env.prod` fora da VPS. A `CHAVE_CRIPTOGRAFIA`
