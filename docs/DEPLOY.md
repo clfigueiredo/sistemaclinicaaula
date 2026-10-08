@@ -12,7 +12,7 @@ Stack de produção (`docker-compose.prod.yml`, arquivo completo — não é ove
 | `wppconnect` | `wppconnect/server-cli` | WhatsApp; webhook interno `http://api:3333/webhooks/whatsapp?token=...` (não passa pelo Caddy) |
 | `api` | `deploy/Dockerfile.api` | aplica `prisma migrate deploy` e sobe a API (`EXECUTAR_WORKERS=false`); volume `uploads` |
 | `worker` | mesma imagem da API | `node dist/worker.js` — todos os jobs BullMQ (envio WhatsApp, lembretes 09:00, recorrências 06:00, cobranças 07:00, retornos 09:30, expiração de solicitações de hora em hora) |
-| `caddy` | `deploy/Dockerfile.web` | build do web + `deploy/Caddyfile`: HTTPS automático (Let's Encrypt), proxy `/api/*` → `api:3333` (remove o `/api`), fallback SPA, cabeçalhos de segurança |
+| `caddy` | `deploy/Dockerfile.web` | build do web + `deploy/Caddyfile`: HTTPS automático (Let's Encrypt) para os três domínios — `DOMINIO_SITE` serve a landing (`landing/`, montada em `/srv/landing`, com templates), `DOMINIO_APP` o painel da clínica e `DOMINIO_ADMIN` o do super admin (`/admin/*`; o resto redireciona para `/admin`, e `/admin` no domínio da clínica redireciona para o do admin); proxy `/api/*` → `api:3333` (remove o `/api`) nos dois painéis, fallback SPA, cabeçalhos de segurança |
 
 Só o Caddy publica portas (80/443 e 443/udp). O `docker-compose.yml` da raiz é **só para desenvolvimento**
 (portas em `127.0.0.1`, WPPConnect com chaves de exemplo) — não use na VPS.
@@ -25,18 +25,19 @@ Numa VPS Ubuntu/Debian limpa, com o DNS `A` do domínio já apontando para ela, 
 curl -fsSL https://raw.githubusercontent.com/clfigueiredo/sistemaclinicaaula/main/deploy/instalar-vps.sh | bash
 ```
 
-O script (`deploy/instalar-vps.sh`) **só pergunta o domínio** e faz o resto: instala o Docker, clona o projeto em
+O script (`deploy/instalar-vps.sh`) **só pergunta os três domínios** (landing page, painel da clínica e painel do
+administrador — sugere `app.` e `admin.` do domínio da landing) e faz o resto: instala o Docker, clona o projeto em
 `/opt/sistema-clinica`, gera o `.env.prod` com todos os segredos aleatórios (`openssl rand -hex 32`), libera
 22/80/443 no `ufw`, sobe o compose de produção, agenda o backup diário e prepara o banco com
 `deploy/acessos.sh` (catálogo de recursos, planos "Teste grátis" — plano de cadastro — e "Profissional", super admin
 e a clínica "Minha Clínica" com usuário admin). As senhas são aleatórias, aparecem no fim da instalação e ficam em
 `/opt/sistema-clinica/ACESSOS.txt` (fora do git); `./deploy/acessos.sh --redefinir` gera senhas novas. Rodar de novo é seguro: um `.env.prod` existente
-mantém os segredos e só tem o domínio atualizado. As seções abaixo descrevem o processo manual equivalente.
+mantém os segredos e só tem os domínios atualizados. As seções abaixo descrevem o processo manual equivalente.
 
 ## 1. Preparar a VPS
 
 1. Ubuntu/Debian atualizado, Docker Engine + plugin `docker compose` instalados.
-2. DNS: registro `A` (e `AAAA`, se houver IPv6) do domínio apontando para a VPS.
+2. DNS: registro `A` (e `AAAA`, se houver IPv6) de **cada um dos três domínios** apontando para a VPS.
 3. Firewall: libere **somente** 22 (SSH), 80 e 443 (ex.: `ufw allow OpenSSH && ufw allow 80,443/tcp && ufw allow 443/udp && ufw enable`).
    Atenção: portas publicadas pelo Docker ignoram o `ufw` — por isso o compose de produção não publica
    Postgres, Redis nem WPPConnect.
@@ -49,7 +50,9 @@ Gere cada segredo com `openssl rand -hex 32` (só `[0-9a-f]`, seguro dentro de U
 ```bash
 cd /opt/sistema-clinica
 cat > .env.prod <<EOF
-DOMINIO=clinica.seudominio.com.br
+DOMINIO_SITE=seudominio.com.br
+DOMINIO_APP=app.seudominio.com.br
+DOMINIO_ADMIN=admin.seudominio.com.br
 EMAIL_ACME=voce@seudominio.com.br
 POSTGRES_USER=clinica
 POSTGRES_DB=clinica
@@ -75,13 +78,13 @@ caracteres hexadecimais (ou for a chave de desenvolvimento).
 > **Não troque depois de em uso** — os segredos já gravados ficariam ilegíveis (seria preciso recadastrá-los).
 > Guarde uma cópia do `.env.prod` em local seguro, fora da VPS.
 
-O compose define sozinho (a partir de `DOMINIO`):
+O compose define sozinho (a partir dos domínios):
 
 | Variável | Valor | Uso |
 |---|---|---|
-| `WEB_URL` | `https://DOMINIO` | CORS |
-| `WEB_URL_PUBLICA` | `https://DOMINIO` | links enviados ao paciente (ex.: `/agendar/<slug>`) |
-| `API_URL_PUBLICA` | `https://DOMINIO/api` | URLs de webhook dos gateways |
+| `WEB_URL` | `https://DOMINIO_APP,https://DOMINIO_ADMIN` | CORS |
+| `WEB_URL_PUBLICA` | `https://DOMINIO_APP` | links enviados ao paciente (ex.: `/agendar/<slug>`) |
+| `API_URL_PUBLICA` | `https://DOMINIO_APP/api` | URLs de webhook dos gateways |
 | `TRUST_PROXY` | `1` | a API confia só no `X-Forwarded-For` do Caddy |
 | `EXECUTAR_WORKERS` | `false` | workers rodam no container `worker` |
 | `HOST` / `PORT` | `0.0.0.0` / `3333` | |
@@ -92,7 +95,7 @@ O compose define sozinho (a partir de `DOMINIO`):
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 docker compose -f docker-compose.prod.yml --env-file .env.prod ps        # tudo "running"/"healthy"
 docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f api worker
-curl https://DOMINIO/api/saude                                            # {"status":"ok",...}
+curl https://DOMINIO_APP/api/saude                                            # {"status":"ok",...}
 ```
 
 A API aplica as migrations (`prisma migrate deploy`) ao iniciar. Atualizar: `git pull` e repetir o
@@ -111,7 +114,7 @@ script do instalador, que é idempotente e não sobrescreve nada que já exista:
 Ele roda `deploy/inicializar-producao.cjs` dentro do container da API (catálogo de recursos e limites espelham
 `src/plugins/recursos.ts` e `prisma/seed.ts` — mantenha em sincronia).
 
-Depois, em `https://DOMINIO/admin/login`:
+Depois, em `https://DOMINIO_ADMIN/admin/login`:
 
 1. **Planos**: "Teste grátis" (plano de cadastro) e "Profissional" já existem; ajuste-os ou crie outros planos pagos
    (planos novos nascem com os recursos da fase 2 desligados: ligue os que fizerem parte do plano). Sem um plano
@@ -123,9 +126,9 @@ Depois, em `https://DOMINIO/admin/login`:
 | Origem | URL | Observação |
 |---|---|---|
 | WPPConnect → API | `http://api:3333/webhooks/whatsapp?token=WEBHOOK_TOKEN` | já configurado no compose (rede interna) |
-| Asaas | `https://DOMINIO/api/webhooks/pagamentos/asaas` | token de autenticação = segredo do webhook cadastrado no painel `/admin/cobranca` |
-| Stripe | `https://DOMINIO/api/webhooks/pagamentos/stripe` | segredo `whsec_...` do endpoint; chave `sk_live_` no ambiente produção |
-| Mercado Pago | `https://DOMINIO/api/webhooks/pagamentos/mercado_pago` | assinatura secreta do webhook |
+| Asaas | `https://DOMINIO_APP/api/webhooks/pagamentos/asaas` | token de autenticação = segredo do webhook cadastrado no painel `/admin/cobranca` |
+| Stripe | `https://DOMINIO_APP/api/webhooks/pagamentos/stripe` | segredo `whsec_...` do endpoint; chave `sk_live_` no ambiente produção |
+| Mercado Pago | `https://DOMINIO_APP/api/webhooks/pagamentos/mercado_pago` | assinatura secreta do webhook |
 
 A URL exata de cada gateway aparece no card do gateway em `/admin/cobranca`. Use credenciais de **produção** e
 ambiente **produção** só depois de validar o fluxo em sandbox (`docs/SETUP_LOCAL.md` §4.4); pagamentos de
@@ -167,7 +170,8 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T api \
 
 ## 6. Checklist pós-deploy
 
-- [ ] `https://DOMINIO` abre com certificado válido; `https://DOMINIO/api/saude` responde `ok`.
+- [ ] Os três domínios abrem com certificado válido (landing, `DOMINIO_APP/login`, `DOMINIO_ADMIN/admin/login`);
+      `https://DOMINIO_APP/api/saude` responde `ok`.
 - [ ] Super admin entra em `/admin/login`; existe um plano marcado como plano de cadastro.
 - [ ] Auto-cadastro em `/cadastro` cria clínica em teste grátis.
 - [ ] WhatsApp de uma clínica de teste conecta pelo QR e o lembrete/resposta funciona (webhook interno).

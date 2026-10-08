@@ -32,25 +32,36 @@ Logins do seed: super admin `admin@sistema.local` / `admin123` (`/admin/login`);
 
 ## Deploy na VPS (produção) — passo a passo
 
-O instalador `deploy/instalar-vps.sh` faz tudo sozinho e **só pergunta o domínio**: todas as senhas e chaves
+O instalador `deploy/instalar-vps.sh` faz tudo sozinho e **só pergunta os domínios**: todas as senhas e chaves
 são geradas aleatoriamente e gravadas no `.env.prod` da VPS.
+
+O sistema usa **três endereços**, um para cada área:
+
+| Área | Exemplo | O que tem |
+|---|---|---|
+| Landing page | `seudominio.com.br` | página de apresentação (uma de teste já vem pronta, troque pela sua) |
+| Painel da clínica | `app.seudominio.com.br` | login, cadastro de clínicas, agenda, prontuário, agendamento online |
+| Painel do administrador | `admin.seudominio.com.br` | planos, clínicas e cobrança (super admin) |
 
 ### O que você precisa
 
 - Uma **VPS com Ubuntu 22.04/24.04 ou Debian 12**, acesso **root** por SSH e no mínimo **2 GB de RAM**
   (recomendado 4 GB — o build das imagens consome memória).
-- Um **domínio ou subdomínio** (ex.: `clinica.seudominio.com.br`).
+- Um **domínio** (ex.: `seudominio.com.br`).
 
-### 1. Apontar o domínio para a VPS
+### 1. Apontar os domínios para a VPS
 
-No painel DNS do seu domínio (Registro.br, Cloudflare, Hostinger etc.), crie um registro:
+No painel DNS do seu domínio (Registro.br, Cloudflare, Hostinger etc.), crie **três** registros:
 
 | Tipo | Nome | Valor |
 |---|---|---|
-| `A` | `clinica` (ou `@` para o domínio raiz) | IP da sua VPS |
+| `A` | `@` (domínio raiz — landing page) | IP da sua VPS |
+| `A` | `app` (painel da clínica) | IP da sua VPS |
+| `A` | `admin` (painel do administrador) | IP da sua VPS |
 
-> Na Cloudflare, deixe a nuvem **cinza** (“DNS only”) — o próprio sistema emite o certificado HTTPS.
-> Aguarde alguns minutos para o DNS propagar (teste com `ping clinica.seudominio.com.br`).
+> Na Cloudflare, deixe a nuvem **cinza** (“DNS only”) — o próprio sistema emite os certificados HTTPS.
+> Aguarde alguns minutos para o DNS propagar (teste com `ping app.seudominio.com.br`).
+> Pode usar outros nomes (ex.: landing em `www.`, painel em `sistema.`): o instalador pergunta cada um.
 
 ### 2. Entrar na VPS
 
@@ -64,7 +75,8 @@ ssh root@IP_DA_VPS
 curl -fsSL https://raw.githubusercontent.com/clfigueiredo/sistemaclinicaaula/main/deploy/instalar-vps.sh | bash
 ```
 
-Digite o domínio quando ele pedir e aguarde (5 a 15 minutos na primeira vez). O script:
+Ele pergunta os três domínios — para o painel da clínica e o do administrador já sugere `app.` e `admin.` do
+domínio da landing (basta apertar Enter). Depois é só aguardar (5 a 15 minutos na primeira vez). O script:
 
 1. instala o Docker e baixa o projeto em `/opt/sistema-clinica`;
 2. gera o `.env.prod` com senhas e chaves aleatórias;
@@ -80,13 +92,15 @@ No final aparece o quadro com os **acessos dos dois painéis** (senhas aleatóri
 ================================================================
   ACESSOS DO SISTEMA
 ================================================================
-  PAINEL SUPER ADMIN  https://clinica.seudominio.com.br/admin/login
-    E-mail: admin@clinica.seudominio.com.br
+  PAINEL SUPER ADMIN  https://admin.seudominio.com.br/admin/login
+    E-mail: admin@seudominio.com.br
     Senha:  Xk3...
 
-  PAINEL DA CLÍNICA   https://clinica.seudominio.com.br/login
-    E-mail: clinica@clinica.seudominio.com.br
+  PAINEL DA CLÍNICA   https://app.seudominio.com.br/login
+    E-mail: clinica@seudominio.com.br
     Senha:  Pq9...
+
+  LANDING PAGE        https://seudominio.com.br
 ================================================================
   Salvo em: /opt/sistema-clinica/ACESSOS.txt
 ================================================================
@@ -104,11 +118,14 @@ cd /opt/sistema-clinica && ./deploy/acessos.sh --redefinir  # senhas novas para 
 
 O sistema já sai configurado — não precisa criar plano nem clínica na mão.
 
-- **Painel super admin** (`/admin/login`): planos, clínicas, cobrança. Os planos “Teste grátis” e “Profissional”
+- **Landing page** (`seudominio.com.br`): página de teste com botões para o cadastro e o login do painel da
+  clínica. Para trocar pela sua, edite os arquivos em `/opt/sistema-clinica/landing/` (vale na hora, sem rebuild).
+  No HTML, `{{env "DOMINIO_APP"}}` vira o domínio do painel da clínica — use nos links de cadastro/login.
+- **Painel super admin** (`admin.seudominio.com.br`): planos, clínicas, cobrança. Os planos “Teste grátis” e “Profissional”
   podem ser editados à vontade.
-- **Painel da clínica** (`/login`): a “Minha Clínica” já está no plano Profissional, ativa. Troque o nome e os
+- **Painel da clínica** (`app.seudominio.com.br`): a “Minha Clínica” já está no plano Profissional, ativa. Troque o nome e os
   dados em **Configurações**, cadastre profissionais e conecte o WhatsApp pelo QR code (menu **WhatsApp**).
-- **Novas clínicas** se cadastram sozinhas em `/cadastro` (entram no Teste grátis).
+- **Novas clínicas** se cadastram sozinhas em `app.seudominio.com.br/cadastro` (entram no Teste grátis).
 - (Opcional) Em **Cobrança** no super admin, configure o gateway de pagamento (Asaas, Stripe ou Mercado Pago).
 
 ### Comandos úteis (na VPS)
@@ -125,14 +142,15 @@ dc restart api worker      # reiniciar
 ./deploy/acessos.sh --redefinir  # senhas novas para os dois painéis
 ```
 
-**Atualizar para a versão mais nova:** rode o mesmo comando do passo 3 (ou `sudo ./deploy/instalar-vps.sh`
+**Trocar algum domínio** ou **atualizar para a versão mais nova:** rode o mesmo comando do passo 3 (ou `sudo ./deploy/instalar-vps.sh`
 dentro de `/opt/sistema-clinica`). Ele baixa o código novo, **mantém as senhas e chaves** e reconstrói os containers.
 
 ### Problemas comuns
 
 | Sintoma | Causa provável / solução |
 |---|---|
-| Aviso “domínio não resolve” / site sem HTTPS | DNS ainda não aponta para a VPS. Corrija o registro `A`, espere propagar e rode `dc restart caddy`. |
+| Aviso “domínio não resolve” / site sem HTTPS | O DNS daquele domínio ainda não aponta para a VPS. Corrija o registro `A`, espere propagar e rode `dc restart caddy`. |
+| Abri `/admin` no domínio da clínica e fui redirecionado | Normal: o painel do administrador só funciona no domínio dele. |
 | Build parou com erro de memória (`Killed`) | VPS com pouca RAM. Use uma de 4 GB ou crie swap: `fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`. |
 | “a API não respondeu em 5 minutos” | Veja `dc logs api` (geralmente migration ou banco ainda subindo) e rode o instalador de novo. |
 | Esqueci / perdi as senhas | `cat /opt/sistema-clinica/ACESSOS.txt` ou `./deploy/acessos.sh --redefinir` (gera novas e mostra na tela). |

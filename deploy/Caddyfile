@@ -1,24 +1,14 @@
-# Caddy — HTTPS automático (Let's Encrypt) para o Sistema Clínica.
-# DOMINIO e EMAIL_ACME vêm do ambiente (docker-compose.prod.yml).
+# Caddy — HTTPS automático (Let's Encrypt) para o Sistema Clínica, com um domínio para cada área:
+#   DOMINIO_SITE  → landing page (pasta landing/ do projeto, montada em /srv/landing; templates do Caddy ligados)
+#   DOMINIO_APP   → painel da clínica (login, cadastro, agenda, agendamento online /agendar/<slug>) + /api
+#   DOMINIO_ADMIN → painel do super admin (/admin/*) + /api
+# Os domínios e o EMAIL_ACME vêm do ambiente (docker-compose.prod.yml / .env.prod). Nenhum domínio fixo aqui.
 {
 	email {$EMAIL_ACME}
 }
 
-{$DOMINIO} {
+(comum) {
 	encode zstd gzip
-
-	# API: /api/* → api:3333 (o prefixo /api é removido, igual ao proxy do Vite em dev).
-	# O Caddy envia X-Forwarded-For; a API confia só nele (TRUST_PROXY=1).
-	handle_path /api/* {
-		reverse_proxy api:3333
-	}
-
-	# Front (build do Vite em /srv) com fallback para o index.html (rotas do React Router).
-	handle {
-		root * /srv
-		try_files {path} /index.html
-		file_server
-	}
 
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
@@ -32,4 +22,60 @@
 		output stdout
 		format console
 	}
+}
+
+# Front (build do Vite em /srv/app) + API. O mesmo build atende o painel da clínica e o do super admin.
+(app) {
+	# API: /api/* → api:3333 (o prefixo /api é removido, igual ao proxy do Vite em dev).
+	# O Caddy envia X-Forwarded-For; a API confia só nele (TRUST_PROXY=1).
+	handle_path /api/* {
+		reverse_proxy api:3333
+	}
+
+	# Fallback para o index.html (rotas do React Router).
+	handle {
+		root * /srv/app
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+# --- Landing page -------------------------------------------------------------------------------------------
+# Edite os arquivos em landing/ (na VPS: /opt/sistema-clinica/landing) — não precisa rebuild.
+# No HTML, {{env "DOMINIO_APP"}} vira o domínio do painel da clínica (links de cadastro/login).
+{$DOMINIO_SITE} {
+	import comum
+	root * /srv/landing
+	templates
+	try_files {path} {path}/ /index.html
+	file_server
+}
+
+# --- Painel da clínica --------------------------------------------------------------------------------------
+{$DOMINIO_APP} {
+	import comum
+
+	# A área do super admin fica só no domínio dele.
+	@admin path /admin /admin/*
+	redir @admin https://{$DOMINIO_ADMIN}{uri}
+
+	import app
+}
+
+# --- Painel do super admin ----------------------------------------------------------------------------------
+{$DOMINIO_ADMIN} {
+	import comum
+
+	# Só /admin/*, /api/* e arquivos estáticos do build; o resto (raiz, /login, /agenda…) vai para /admin.
+	@fora_do_admin {
+		not path /admin /admin/* /api/*
+		not file {
+			root /srv/app
+			try_files {path}
+		}
+	}
+	redir / /admin 302
+	redir @fora_do_admin /admin 302
+
+	import app
 }

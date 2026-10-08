@@ -30,7 +30,8 @@ clínicas num painel super admin; cada plano libera/limita recursos do sistema.
 - **Fila/agendador:** Redis + BullMQ
 - **WhatsApp:** WPPConnect Server (Docker) — não oficial
 - **Local:** Docker Desktop (Postgres, Redis, WPPConnect via docker-compose); API e Web com `npm run dev`
-- **Produção:** VPS com o mesmo docker-compose + Caddy (HTTPS)
+- **Produção:** VPS com o mesmo docker-compose + Caddy (HTTPS), três domínios: landing (`DOMINIO_SITE`),
+  painel da clínica (`DOMINIO_APP`) e painel do super admin (`DOMINIO_ADMIN`, só `/admin/*`) — `docs/DEPLOY.md`
 
 **Não usar Next.js** — decisão do usuário: React puro com Vite.
 
@@ -48,7 +49,8 @@ Sistema_Clinica/
 ├── docker-compose.yml        # DEV: postgres 16, redis 7 (com senha), wppconnect — portas só em 127.0.0.1
 ├── docker-compose.prod.yml   # PRODUÇÃO: + api, worker, caddy; sem portas internas; segredos obrigatórios
 ├── deploy/                   # Dockerfile.api, Dockerfile.web (build do web + Caddy), Caddyfile, backup.sh,
-│                             # instalar-vps.sh (instalador: só pede o domínio), acessos.sh + inicializar-producao.cjs
+│                             # instalar-vps.sh (instalador: só pede os 3 domínios), acessos.sh + inicializar-producao.cjs
+├── landing/                  # landing page de teste (produção: DOMINIO_SITE; Caddy templates — {{env "DOMINIO_APP"}})
 ├── .env.example / .env       # ÚNICO .env, na raiz (lido por compose, API, Prisma e testes)
 ├── package.json              # scripts orquestradores (dev, build, typecheck, test, db:*)
 ├── docs/ (ARQUITETURA.md, SETUP_LOCAL.md, DEPLOY.md, FASE2.md)

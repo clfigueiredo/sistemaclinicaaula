@@ -13,11 +13,13 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 ARQ_ACESSOS="$(pwd)/ACESSOS.txt"
 
 [ -f "$ENV_FILE" ] || { echo "[erro] $ENV_FILE não encontrado em $(pwd)." >&2; exit 1; }
-DOMINIO="$(grep -E '^DOMINIO=' "$ENV_FILE" | cut -d= -f2-)"
+valor_env() { grep -E "^$1=" "$ENV_FILE" | tail -n1 | cut -d= -f2-; }
+DOMINIO_SITE="$(valor_env DOMINIO_SITE)"; DOMINIO_APP="$(valor_env DOMINIO_APP)"; DOMINIO_ADMIN="$(valor_env DOMINIO_ADMIN)"
+[ -n "$DOMINIO_SITE" ] && [ -n "$DOMINIO_APP" ] && [ -n "$DOMINIO_ADMIN" ]   || { echo "[erro] defina DOMINIO_SITE, DOMINIO_APP e DOMINIO_ADMIN no $ENV_FILE (rode o instalador)." >&2; exit 1; }
 MODO=instalar
 [ "${1:-}" = "--redefinir" ] && MODO=redefinir
 
-SAIDA="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T -e DOMINIO="$DOMINIO" -e MODO="$MODO" \
+SAIDA="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T -e DOMINIO="$DOMINIO_SITE" -e MODO="$MODO" \
   api node --input-type=commonjs - < deploy/inicializar-producao.cjs 2>&1)" || {
   echo "[erro] falha ao preparar os acessos:" >&2
   echo "$SAIDA" >&2
@@ -50,18 +52,19 @@ Guarde em local seguro e troque as senhas no primeiro acesso. Este arquivo não 
 
 [PAINEL SUPER ADMIN]
 Para: dono do SaaS — planos, clínicas, cobrança.
-URL: https://$DOMINIO/admin/login
+URL: https://$DOMINIO_ADMIN/admin/login
 E-mail: $ADMIN_EMAIL
 Senha: ${ADMIN_SENHA:-$SEM_SENHA}
 
 [PAINEL DA CLÍNICA]
 Para: a clínica "Minha Clínica" (plano Profissional, ativa) — agenda, pacientes, prontuário, financeiro.
-URL: https://$DOMINIO/login
+URL: https://$DOMINIO_APP/login
 E-mail: $CLIN_EMAIL
 Senha: ${CLIN_SENHA:-$SEM_SENHA}
 
 [OUTROS ENDEREÇOS]
-Cadastro de novas clínicas (teste grátis): https://$DOMINIO/cadastro
+Landing page:                              https://$DOMINIO_SITE
+Cadastro de novas clínicas (teste grátis): https://$DOMINIO_APP/cadastro
 EOF
 chmod 600 "$ARQ_ACESSOS"
 umask 022
@@ -70,13 +73,15 @@ echo
 echo "================================================================"
 echo "  ACESSOS DO SISTEMA"
 echo "================================================================"
-echo "  PAINEL SUPER ADMIN  https://$DOMINIO/admin/login"
+echo "  PAINEL SUPER ADMIN  https://$DOMINIO_ADMIN/admin/login"
 echo "    E-mail: $ADMIN_EMAIL"
 echo "    Senha:  ${ADMIN_SENHA:-$SEM_SENHA}"
 echo
-echo "  PAINEL DA CLÍNICA   https://$DOMINIO/login"
+echo "  PAINEL DA CLÍNICA   https://$DOMINIO_APP/login"
 echo "    E-mail: $CLIN_EMAIL"
 echo "    Senha:  ${CLIN_SENHA:-$SEM_SENHA}"
+echo
+echo "  LANDING PAGE        https://$DOMINIO_SITE"
 echo "================================================================"
 echo "  Salvo em: $ARQ_ACESSOS"
 echo "================================================================"

@@ -3,7 +3,8 @@
 #   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 #
 # - Postgres, Redis e WPPConnect NÃO publicam portas: só a rede interna do compose os alcança.
-# - Só o Caddy publica 80/443 (HTTPS automático via Let's Encrypt).
+# - Só o Caddy publica 80/443 (HTTPS automático via Let's Encrypt), com três domínios:
+#     DOMINIO_SITE (landing page), DOMINIO_APP (painel da clínica) e DOMINIO_ADMIN (painel do super admin).
 # - Todas as variáveis sensíveis são OBRIGATÓRIAS (${VAR:?...}): sem valor padrão inseguro.
 # - Passo a passo, geração de segredos e backup: docs/DEPLOY.md.
 name: sistema-clinica
@@ -20,7 +21,8 @@ x-api-env: &api-env
   REDIS_URL: redis://:${REDIS_PASSWORD:?defina REDIS_PASSWORD}@redis:6379
   JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET}
   JWT_EXPIRA_EM: ${JWT_EXPIRA_EM:-12h}
-  WEB_URL: https://${DOMINIO:?defina DOMINIO}
+  # CORS: os dois painéis (o front chama a API pelo mesmo domínio em /api).
+  WEB_URL: https://${DOMINIO_APP:?defina DOMINIO_APP},https://${DOMINIO_ADMIN:?defina DOMINIO_ADMIN}
   EXECUTAR_WORKERS: "false"
   UPLOAD_DIR: ./uploads
   UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-10}
@@ -30,9 +32,10 @@ x-api-env: &api-env
   TZ_PADRAO: ${TZ_PADRAO:-America/Sao_Paulo}
   # Fase 2: cifra credenciais dos gateways de pagamento (openssl rand -hex 32). NÃO troque depois de em uso.
   CHAVE_CRIPTOGRAFIA: ${CHAVE_CRIPTOGRAFIA:?defina CHAVE_CRIPTOGRAFIA}
-  # Webhooks dos gateways: https://DOMINIO/api/webhooks/pagamentos/<gateway> (o Caddy remove o /api).
-  API_URL_PUBLICA: https://${DOMINIO:?defina DOMINIO}/api
-  WEB_URL_PUBLICA: https://${DOMINIO:?defina DOMINIO}
+  # Webhooks dos gateways: https://DOMINIO_APP/api/webhooks/pagamentos/<gateway> (o Caddy remove o /api).
+  API_URL_PUBLICA: https://${DOMINIO_APP:?defina DOMINIO_APP}/api
+  # Links enviados ao paciente (ex.: /agendar/<slug>) apontam para o painel da clínica.
+  WEB_URL_PUBLICA: https://${DOMINIO_APP:?defina DOMINIO_APP}
 
 services:
   postgres:
@@ -125,7 +128,9 @@ services:
     container_name: clinica-caddy
     restart: unless-stopped
     environment:
-      DOMINIO: ${DOMINIO:?defina DOMINIO}
+      DOMINIO_SITE: ${DOMINIO_SITE:?defina DOMINIO_SITE}
+      DOMINIO_APP: ${DOMINIO_APP:?defina DOMINIO_APP}
+      DOMINIO_ADMIN: ${DOMINIO_ADMIN:?defina DOMINIO_ADMIN}
       EMAIL_ACME: ${EMAIL_ACME:?defina EMAIL_ACME}
     ports:
       - "80:80"
@@ -134,6 +139,8 @@ services:
     volumes:
       - caddy_data:/data
       - caddy_config:/config
+      # Landing page editável na VPS (landing/ do projeto) sem rebuild.
+      - ./landing:/srv/landing:ro
     depends_on:
       - api
 
