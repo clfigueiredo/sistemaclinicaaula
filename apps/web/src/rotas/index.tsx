@@ -18,6 +18,8 @@ const Login = p(() => import('@/paginas/publico/Login'));
 const Cadastro = p(() => import('@/paginas/publico/Cadastro'));
 const LoginAdmin = p(() => import('@/paginas/publico/LoginAdmin'));
 const NaoEncontrada = p(() => import('@/paginas/publico/NaoEncontrada'));
+const EsqueciSenha = p(() => import('@/paginas/publico/EsqueciSenha'));
+const RedefinirSenha = p(() => import('@/paginas/publico/RedefinirSenha'));
 const AgendamentoOnline = p(() => import('@/paginas/publico/agendar/AgendamentoOnline'));
 
 // Super admin
@@ -28,6 +30,7 @@ const ListaClinicas = p(() => import('@/paginas/admin/clinicas/ListaClinicas'));
 const DetalheClinica = p(() => import('@/paginas/admin/clinicas/DetalheClinica'));
 const AdminCobranca = p(() => import('@/paginas/admin/cobranca/Cobranca'));
 const AdminCobrancas = p(() => import('@/paginas/admin/cobranca/PaginaCobrancas'));
+const AdminEmail = p(() => import('@/paginas/admin/email/Email'));
 
 // Clínica
 const Agenda = p(() => import('@/paginas/clinica/agenda/Agenda'));
@@ -77,6 +80,9 @@ export const router = createBrowserRouter([
         ],
       },
       { element: <RotaPublica tipo="admin" />, children: [{ path: '/admin/login', element: <LoginAdmin /> }] },
+      // Esqueci minha senha (público; acessível mesmo logado — o link do e-mail pode abrir numa aba já logada)
+      { path: '/esqueci-senha', element: <EsqueciSenha /> },
+      { path: '/redefinir-senha', element: <RedefinirSenha /> },
       // Agendamento online (público, sem login; acessível mesmo logado)
       { path: '/agendar/:slug', element: <AgendamentoOnline /> },
 
@@ -95,6 +101,7 @@ export const router = createBrowserRouter([
               { path: 'clinicas/:id', element: <DetalheClinica /> },
               { path: 'cobranca', element: <AdminCobranca /> },
               { path: 'cobrancas', element: <AdminCobrancas /> },
+              { path: 'email', element: <AdminEmail /> },
             ],
           },
         ],

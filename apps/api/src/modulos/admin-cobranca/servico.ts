@@ -30,6 +30,10 @@
  *     plano da assinatura é trocado (`inicio` = agora) e a cobrança automática liga (dia de vencimento = dia da
  *     cobrança, máx. 28). Em aberto, ela NÃO conta como dívida (não liberou nada); estornada conta, como as outras.
  *   - Sem gateway ativo: nada é gerado (o worker só registra no log); nada quebra.
+ *   - E-mails (emails.ts), sempre DEPOIS do commit e sem nunca derrubar o fluxo: primeira confirmação de uma
+ *     contratação que liberou o plano ⇒ `pagamento_confirmado`; de uma mensalidade ⇒ `pagamento_renovado` (recibo,
+ *     com nº da parcela); job diário ⇒ `aviso_renovacao` das mensalidades pendentes que vencem em 2 dias.
+ *     `aplicarEvento` devolve a lista de e-mails e quem chama (webhook / baixa manual) dispara após a transação.
  */
 import { Prisma, type Cobranca, type MetodoCobranca, type ProvedorPagamento, type StatusCobranca } from '@prisma/client';
 import { fromZonedTime } from 'date-fns-tz';
@@ -47,6 +51,7 @@ import {
 import { NOMES_GATEWAY } from '../../servicos/pagamentos/http';
 import { dataSemHora, hojeNoFuso, paraDataIso } from '../../servicos/financeiroComum';
 import { ErroNegocio, ou404 } from '../../utils/erros';
+import { dispararEmailsCobranca, enfileirarAvisosRenovacao, type EmailCobranca } from './emails';
 
 export const ANTECEDENCIA_GERACAO_DIAS = 10;
 export const TOLERANCIA_PADRAO_DIAS = 5;
@@ -376,7 +381,7 @@ export async function registrarPagamentoManual(id: string, dados: { pagoEm?: Dat
   if (!STATUS_EM_ABERTO.includes(c.status)) {
     throw new ErroNegocio(409, 'cobranca_nao_pagavel', 'Só é possível dar baixa manual em cobranças pendentes ou vencidas.');
   }
-  const aviso = await aplicarEvento(c.gateway, {
+  const { aviso, emails } = await aplicarEvento(c.gateway, {
     idEvento: `manual:${c.id}`,
     tipo: 'BAIXA_MANUAL',
     acao: 'cobranca_paga',
@@ -384,6 +389,7 @@ export async function registrarPagamentoManual(id: string, dados: { pagoEm?: Dat
     pagoEm: dados.pagoEm ?? new Date(),
     bruto: { baixa_manual: true, admin: dados.adminId ?? null, em: new Date().toISOString() },
   });
+  await dispararEmailsCobranca(emails); // após o commit; nunca lança
   let avisoGateway: string | null = null;
   if (c.id_externo) {
     try {
@@ -501,25 +507,32 @@ export async function processarWebhook(provedor: ProvedorPagamento, req: Requisi
     registroId = existente.id;
   }
 
+  let resultado: ResultadoEvento;
   try {
-    const aviso = await aplicarEvento(provedor, evento);
-    await prisma.eventoGateway.update({ where: { id: registroId }, data: { processado_em: new Date(), erro: aviso } });
-    return { status: 200, corpo: aviso ? { ok: true, aviso } : { ok: true } };
+    resultado = await aplicarEvento(provedor, evento);
+    await prisma.eventoGateway.update({ where: { id: registroId }, data: { processado_em: new Date(), erro: resultado.aviso } });
   } catch (e) {
     await prisma.eventoGateway
       .update({ where: { id: registroId }, data: { erro: ((e as Error).message || 'Erro ao processar').slice(0, 500) } })
       .catch(() => undefined);
     throw e;
   }
+  await dispararEmailsCobranca(resultado.emails); // após o commit; nunca lança
+  const { aviso } = resultado;
+  return { status: 200, corpo: aviso ? { ok: true, aviso } : { ok: true } };
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Aplica o efeito do evento. Retorna um aviso (gravado em eventos_gateway.erro) ou null. */
-async function aplicarEvento(provedor: ProvedorPagamento, evento: EventoPagamento): Promise<string | null> {
-  if (evento.acao === 'ignorar' || evento.acao === 'cobranca_criada') return null;
+/** `aviso` (gravado em eventos_gateway.erro) ou null + e-mails a disparar DEPOIS do commit. */
+type ResultadoEvento = { aviso: string | null; emails: EmailCobranca[] };
 
-  return prisma.$transaction(async (tx) => {
+/** Aplica o efeito do evento numa transação. Os e-mails só são devolvidos (quem chama dispara após o commit). */
+async function aplicarEvento(provedor: ProvedorPagamento, evento: EventoPagamento): Promise<ResultadoEvento> {
+  if (evento.acao === 'ignorar' || evento.acao === 'cobranca_criada') return { aviso: null, emails: [] };
+
+  const emails: EmailCobranca[] = [];
+  const aviso = await prisma.$transaction(async (tx): Promise<string | null> => {
     let cobranca: Cobranca | null = null;
     if (evento.cobrancaIdExterno) {
       cobranca = await tx.cobranca.findUnique({
@@ -560,6 +573,10 @@ async function aplicarEvento(provedor: ProvedorPagamento, evento: EventoPagament
           : await tx.assinatura.findUnique({ where: { clinica_id: cobranca.clinica_id } });
         if (!assinatura) return null;
         const manualAntes = assinatura.status === 'cancelada' || assinatura.status === 'bloqueada';
+        // Contratação: só quando liberou o plano. Mensalidade: sempre (recibo), mesmo com status manual/outra dívida.
+        if (primeiraConfirmacao && (!cobranca.plano_contratado_id || !manualAntes)) {
+          emails.push({ cobrancaId: cobranca.id, tipo: cobranca.plano_contratado_id ? 'pagamento_confirmado' : 'pagamento_renovado' });
+        }
         // Contratação pela clínica: o pagamento libera o plano escolhido e liga a cobrança mensal.
         if (primeiraConfirmacao && cobranca.plano_contratado_id && !manualAntes) {
           const trocar = assinatura.plano_id !== cobranca.plano_contratado_id;
@@ -616,6 +633,7 @@ async function aplicarEvento(provedor: ProvedorPagamento, evento: EventoPagament
     }
     return null;
   });
+  return { aviso, emails };
 }
 
 /**
@@ -658,6 +676,8 @@ export type ResumoJobCobrancas = {
   marcadas_vencidas: number;
   geradas: number;
   assinaturas_vencidas: number;
+  /** E-mails `aviso_renovacao` enfileirados nesta execução (0 ao repetir no mesmo dia). */
+  avisos_renovacao: number;
   erros: number;
   aviso?: string;
 };
@@ -668,10 +688,19 @@ type Log = { info: (msg: string) => void; warn: (msg: string) => void };
  * Job diário (idempotente — pode rodar várias vezes no mesmo dia):
  *   1. cobranças `pendente` com vencimento < hoje ⇒ `vencida`;
  *   2. gera a cobrança do próximo ciclo das assinaturas com cobrança automática (gateway ativo);
- *   3. tolerância: cobrança em dívida (pendente/vencida/estornada) há mais de N dias ⇒ assinatura `ativa` → `vencida`.
+ *   3. tolerância: cobrança em dívida (pendente/vencida/estornada) há mais de N dias ⇒ assinatura `ativa` → `vencida`;
+ *   4. e-mail `aviso_renovacao` das mensalidades pendentes que vencem em 2 dias (depois da etapa 2, para já incluir a
+ *      cobrança recém-gerada do próximo ciclo; idempotente por cobrança + destinatário).
  */
 export async function executarJobCobrancas(hoje = hojeIso(), log: Log = console): Promise<ResumoJobCobrancas> {
-  const resumo: ResumoJobCobrancas = { processadas: 0, marcadas_vencidas: 0, geradas: 0, assinaturas_vencidas: 0, erros: 0 };
+  const resumo: ResumoJobCobrancas = {
+    processadas: 0,
+    marcadas_vencidas: 0,
+    geradas: 0,
+    assinaturas_vencidas: 0,
+    avisos_renovacao: 0,
+    erros: 0,
+  };
   const dataHoje = dataSemHora(hoje);
 
   // 1. vencidas
@@ -725,5 +754,8 @@ export async function executarJobCobrancas(hoje = hojeIso(), log: Log = console)
     resumo.assinaturas_vencidas = r.count;
     log.info(`[cobrancas] ${r.count} assinatura(s) marcada(s) como vencida(s) por falta de pagamento.`);
   }
+
+  // 4. aviso de renovação por e-mail (nunca lança)
+  resumo.avisos_renovacao = await enfileirarAvisosRenovacao(hoje, log);
   return resumo;
 }

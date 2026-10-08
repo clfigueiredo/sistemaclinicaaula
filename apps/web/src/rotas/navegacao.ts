@@ -23,6 +23,7 @@ import {
   Users,
   Wallet,
   type LucideIcon,
+  Mail,
 } from 'lucide-react';
 import type { CodigoRecurso, Me, Papel } from '@/api/tipos';
 
@@ -104,6 +105,7 @@ export const MENU_ADMIN: ItemMenu[] = [
   { rotulo: 'Clínicas', caminho: '/admin/clinicas', icone: Building2 },
   { rotulo: 'Cobranças', caminho: '/admin/cobrancas', icone: Receipt },
   { rotulo: 'Gateways', caminho: '/admin/cobranca', icone: CreditCard },
+  { rotulo: 'E-mails', caminho: '/admin/email', icone: Mail },
 ];
 
 /** Abas da área financeira (/financeiro/*), na ordem de exibição. */

@@ -11,7 +11,7 @@ clínicas num painel super admin; cada plano libera/limita recursos do sistema.
 | Documento | Conteúdo |
 |---|---|
 | `docs/ARQUITETURA.md` | visão geral, planos/recursos, papéis, **modelo de dados completo**, fluxos (WhatsApp, agendamento online, cobrança) — ler antes de mexer em qualquer módulo |
-| `docs/FASE2.md` | contratos (rotas, payloads, regras) dos módulos da fase 2: financeiro, agendamento online, lista de espera, documentos PDF, retornos, dashboard e cobrança do SaaS |
+| `docs/FASE2.md` | contratos (rotas, payloads, regras) dos módulos da fase 2: financeiro, agendamento online, lista de espera, documentos PDF, retornos, dashboard e cobrança do SaaS; §13 contratação; §14 e-mails transacionais |
 | `docs/SETUP_LOCAL.md` | subir do zero no Windows, roteiros de teste manual, solução de problemas |
 | `docs/DEPLOY.md` | produção na VPS (compose de produção, Caddy, segredos, webhooks, backup) |
 | `README.md` | resumo de uma página |
@@ -28,6 +28,7 @@ clínicas num painel super admin; cada plano libera/limita recursos do sistema.
 - **Backend:** Node 20+ + TypeScript + Fastify, validação com Zod
 - **Banco:** PostgreSQL + Prisma
 - **Fila/agendador:** Redis + BullMQ
+- **E-mail:** SMTP genérico (nodemailer) — provedor **Resend**, configurado no painel do super admin (`/admin/email`); Mailpit no dev
 - **WhatsApp:** WPPConnect Server (Docker) — não oficial
 - **Local:** Docker Desktop (Postgres, Redis, WPPConnect via docker-compose); API e Web com `npm run dev`
 - **Produção:** VPS com o mesmo docker-compose + Caddy (HTTPS), três domínios: landing (`DOMINIO_SITE`),
@@ -56,7 +57,7 @@ Sistema_Clinica/
 ├── docs/ (ARQUITETURA.md, SETUP_LOCAL.md, DEPLOY.md, FASE2.md)
 ├── apps/api/                 # Fastify 5 + Zod 4 + Prisma 6 (ESM, TypeScript estrito, tsx watch / tsup)
 │   ├── prisma/schema.prisma  # modelo de dados completo + migrations + seed.ts
-│   ├── test/                 # vitest (banco clinica_teste) — 19 arquivos, um por módulo + tenant/recursos/segurança
+│   ├── test/                 # vitest (banco clinica_teste) — 23 arquivos, um por módulo + tenant/recursos/segurança + e-mails
 │   └── src/
 │       ├── app.ts            # buildApp() — exportado para testes (app.inject)
 │       ├── server.ts         # sobe a API (+ workers se EXECUTAR_WORKERS=true)
@@ -68,14 +69,15 @@ Sistema_Clinica/
 │       │                     # cripto.ts (AES-256-GCM), slug.ts, ip.ts (chave de IP; IPv6 por /64)
 │       ├── servicos/         # filas.ts (BullMQ/Redis), whatsapp/* (service, adapters, envio, mensagens,
 │       │                     # respostas, lembretes), pagamentos/* (Asaas, Stripe, Mercado Pago + fábrica),
-│       │                     # configuracaoClinica.ts, financeiroComum.ts
+│       │                     # email/* (smtpAdapter, modelos, renderizar, envio), configuracaoClinica.ts, financeiroComum.ts
 │       ├── workers/          # index.ts registra: envio WhatsApp, lembretes (09:00), recorrências (06:00),
-│       │                     # cobranças (07:00), retornos (09:30), expirar solicitações (:15 de cada hora)
+│       │                     # cobranças (07:00), retornos (09:30), expirar solicitações (:15 de cada hora), e-mails
 │       └── modulos/<nome>/index.ts   # um plugin por domínio (registrados em modulos/index.ts)
 │           # MVP: auth, me, admin-planos, admin-clinicas, profissionais, convenios, usuarios, pacientes,
 │           #      prontuario, agendamentos, whatsapp
 │           # Fase 2: financeiro, agendamento-online, lista-espera, documentos, retornos, dashboard, admin-cobranca
 │           # + contratacao (planos na landing e contratação pela clínica — docs/FASE2.md §13)
+│           # + admin-email (configuração SMTP, modelos editáveis e histórico de e-mails — docs/FASE2.md §14)
 └── apps/web/                 # React 19 + Vite + Tailwind 4 + shadcn/ui + TanStack Query + React Router 7
     ├── e2e/smoke/            # Playwright: 8 specs / 13 testes (01-* a 04-* MVP, 05-* a 08-* fase 2)
     └── src/
@@ -172,7 +174,7 @@ http://localhost:5173 depois de 1–2 min.
 Todos na **raiz** do projeto (passo a passo completo em `docs/SETUP_LOCAL.md`):
 
 ```bash
-docker compose up -d        # (ou npm run docker:up) postgres (5432), redis (6379, com senha), wppconnect (21465) — só em 127.0.0.1
+docker compose up -d        # (ou npm run docker:up) postgres (5432), redis (6379, com senha), wppconnect (21465), mailpit (1025/8025) — só em 127.0.0.1
 npm install                 # raiz + apps/api + apps/web (postinstall) + prisma generate
 npm run db:migrate          # prisma migrate dev (cria/aplica migrations)
 npm run db:seed             # seed idempotente (super admin, recursos, planos, clínica demo)
@@ -191,7 +193,9 @@ npm run db:studio           # Prisma Studio
 
 Última execução registrada da suíte inteira: **243 testes em 18 arquivos** (vitest) e **13 testes E2E** em 8 specs, todos
 passando. Em 08/10/2026 rodaram só `contratacao` (novo), `cobranca` e `admin` (43 testes, todos passando); `recursos` e
-`financeiro` foram ajustados ao bloqueio total mas não rodaram — rode a suíte inteira num ambiente de dev.
+`financeiro` foram ajustados ao bloqueio total mas não rodaram. Os 4 arquivos de e-mails (`email-servico`, `admin-email`,
+`esqueci-senha`, `emails-cobranca`, 08/10/2026) foram escritos mas **ainda não rodaram** — rode a suíte inteira num
+ambiente de dev.
 **Na VPS de homologação não rode o vitest** sem o usuário pedir (ele cria o banco `clinica_teste` no Postgres da VPS).
 
 ### Dicas do ambiente (disco de rede SMB)
@@ -246,7 +250,9 @@ clínica nova em `/cadastro`. O seed é idempotente e **nunca** deve rodar em pr
 - Módulos da fase 2 do produto (implementados, contrato e adições em `docs/FASE2.md`): `financeiro`,
   `agendamento-online` (+ rotas públicas `/publico/clinicas/:slug*`), `lista-espera`, `documentos`, `retornos`,
   `dashboard`, `admin-cobranca` (+ webhooks `POST /webhooks/pagamentos/:gateway` e `GET /cobrancas/minhas`).
-- Depois da fase 2: `contratacao` (`GET /publico/planos`, `GET/POST /contratacao` — `docs/FASE2.md` §13).
+- Depois da fase 2: `contratacao` (`GET /publico/planos`, `GET/POST /contratacao` — `docs/FASE2.md` §13) e
+  `admin-email` (`/admin/email/*` — `docs/FASE2.md` §14). "Esqueci minha senha" fica no `auth`
+  (`POST /auth/esqueci-senha`, `GET /auth/redefinir-senha/validar`, `POST /auth/redefinir-senha`).
 - Integrações entre módulos da fase 2 (sem hooks genéricos — chamadas diretas a serviços exportados):
   criar agendamento (`POST /agendamentos` e aprovação online) chama `vincularRetornoAoNovoAgendamento`
   (`modulos/retornos/servico.ts`); trocar para plano pago (`PUT /admin/clinicas/:id/assinatura`) chama
@@ -385,6 +391,17 @@ await request.db.$transaction(async (tx) => {
   `http://host.docker.internal:3333/webhooks/whatsapp?token=...`). O logger mascara `token=` na URL
   (`serializarRequisicao` em `app.ts`).
 
+### API — e-mails transacionais (`src/servicos/email`)
+
+- Outros módulos enviam e-mail **só** com `enfileirarEmail({ tipo, para, variaveis, referencia, clinicaId })`
+  (`servicos/email/index.ts`), **depois do commit**. Ela nunca lança; `(tipo, referencia, destinatario)` é único
+  (evento repetido não reenvia). Tipos: `boas_vindas`, `redefinir_senha`, `pagamento_confirmado`, `aviso_renovacao`,
+  `pagamento_renovado`; variáveis e textos padrão em `modelosPadrao.ts` (`CATALOGO_EMAILS`) — tipo novo = enum
+  `TipoEmail` + entrada no catálogo. Links: `linksSistema()`; formatos: `formatoEmail`.
+- Configuração SMTP e modelos ficam no banco (`configuracao_email`, `modelos_email`), editados em `/admin/email`;
+  envio desligado ⇒ registro `ignorado`. Tabelas de e-mail são **proibidas via `request.db`** (prisma cru).
+- **Nunca** mande senha por e-mail. Testes: `definirProvedorEmail(criarAdaptadorEmailFake())` + `definirEnfileiradorEmail`.
+
 ### Variáveis de ambiente de segurança
 
 - `REDIS_PASSWORD` (compose sobe o Redis com `--requirepass`) e `REDIS_URL=redis://:SENHA@host:6379`.
@@ -467,10 +484,15 @@ await request.db.$transaction(async (tx) => {
       landing page, bloqueio total com assinatura inativa e tela **Cobranças** do super admin (`/admin/cobrancas`:
       filtros a vencer / em atraso / inadimplentes / pagas / canceladas, "bloqueia em", baixa manual); os gateways
       ficaram em `/admin/cobranca`. Fluxo Asaas sandbox testado de ponta a ponta na VPS de homologação (08/10/2026).
+- [x] **E-mails transacionais** (migration `emails_transacionais`): boas-vindas, esqueci minha senha, pagamento
+      confirmado, aviso de renovação (2 dias antes) e recibo da mensalidade com nº da parcela; menu **E-mails** do
+      super admin com SMTP (Resend), modelos editáveis, histórico e tutorial (`docs/FASE2.md` §14).
 
 **Pendências reais** (nada disso exige código novo a princípio):
 
 - [ ] Teste manual do WhatsApp com **celular real** (roteiro em `docs/SETUP_LOCAL.md`).
+- [ ] E-mails: criar a conta no **Resend**, verificar o subdomínio de envio no DNS (Hostinger) e configurar em
+      `/admin/email` (tutorial na tela; `docs/DEPLOY.md` §5). Até lá os e-mails ficam `ignorado`.
 - [x] **Deploy na VPS de homologação** (`/opt/sistema-clinica`, `docker-compose.prod.yml` + `.env.prod`; domínios
       `noitedeouro.com` / `sistema.` / `admin.`). Ainda **não** é produção: o usuário edita, faz deploy e testa ali.
 - [x] Asaas **sandbox** na VPS: webhook `https://sistema.noitedeouro.com/api/webhooks/pagamentos/asaas`, contratação
@@ -478,7 +500,7 @@ await request.db.$transaction(async (tx) => {
 - [ ] Asaas sandbox: testar **Pix** (cadastrar chave Pix na conta sandbox), **boleto**, cobrança mensal gerada pelo
       worker (dia 8 de cada mês para a "Clinica Fórum Telecom"), vencimento ⇒ bloqueio total ⇒ pagamento ⇒ libera, e
       **estorno**. Stripe e Mercado Pago ainda não testados com credenciais reais.
-- [ ] Rodar a suíte vitest inteira e o E2E num ambiente de dev (o E2E ainda não cobre `/planos`, `/admin/cobrancas`
+- [ ] Rodar a suíte vitest inteira (inclui os 4 arquivos novos de e-mails) e o E2E num ambiente de dev (o E2E ainda não cobre `/planos`, `/admin/cobrancas`, `/admin/email`, esqueci a senha
       nem a tela de acesso suspenso).
 - [ ] Antes de virar produção: trocar o gateway para **produção**, rever planos/preços e as clínicas de teste.
 

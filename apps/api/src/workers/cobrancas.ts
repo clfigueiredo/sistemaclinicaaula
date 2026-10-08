@@ -9,6 +9,8 @@
  *      `gateways_pagamento.descricao_cobranca`;
  *   3. cobrança em aberto há mais de `dias_tolerancia` dias ⇒ assinatura `ativa` → `vencida`
  *      (volta a `ativa` pelo webhook de pagamento). `bloqueada` fica para bloqueio manual.
+ *   4. e-mail `aviso_renovacao` das mensalidades pendentes (com link) que vencem em 2 dias
+ *      (modulos/admin-cobranca/emails.ts; idempotente — rodar 2× no dia não reenvia).
  * Sem gateway ativo: só marca vencidas/tolerância e registra no log. Idempotente (pode rodar várias vezes).
  * `dados.data` ('YYYY-MM-DD') simula o dia (testes/reprocessamento); padrão = hoje em TZ_PADRAO.
  */

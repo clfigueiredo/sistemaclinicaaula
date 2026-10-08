@@ -104,7 +104,16 @@ const MODELOS_SOMENTE_LEITURA: ReadonlySet<string> = new Set([
 ]);
 const MODELOS_FILTRADOS_POR_CLINICA: ReadonlySet<string> = new Set(['Assinatura', 'Cobranca']);
 /** Plataforma, proibidos via request.db. */
-const MODELOS_PROIBIDOS: ReadonlySet<string> = new Set(['UsuarioPlataforma', 'GatewayPagamento', 'EventoGateway']);
+const MODELOS_PROIBIDOS: ReadonlySet<string> = new Set([
+  'UsuarioPlataforma',
+  'GatewayPagamento',
+  'EventoGateway',
+  // E-mails transacionais (plataforma): só pelo prisma cru (servicos/email, admin-email, auth).
+  'ConfiguracaoEmail',
+  'ModeloEmail',
+  'EmailEnviado',
+  'TokenRedefinicaoSenha',
+]);
 
 const OPERACOES_LEITURA = new Set([
   'findUnique',

@@ -14,6 +14,8 @@
  *   - RETORNOS (workers/retornos.ts, dono: retornos) diário 09:30
  *   - SOLICITACOES_AGENDAMENTO (workers/solicitacoesAgendamento.ts, dono: agendamento-online) de hora em hora
  *   - COBRANCAS (workers/cobrancas.ts, dono: admin-cobranca) diário 07:00
+ *   E-mails transacionais:
+ *   - EMAILS (workers/emails.ts): um job por e-mail, até 5 tentativas com espera crescente
  *
  * Shutdown gracioso: `fecharFilas()` (servicos/filas.ts) fecha os workers (espera os jobs em
  * andamento), as filas e a conexão Redis — chamado por server.ts e worker.ts em SIGINT/SIGTERM.
@@ -24,6 +26,7 @@ import { agendarJobDiarioRecorrencias, iniciarWorkerDiarioRecorrencias } from '.
 import { agendarJobDiarioRetornos, iniciarWorkerDiarioRetornos } from './retornos';
 import { agendarJobExpirarSolicitacoes, iniciarWorkerExpirarSolicitacoes } from './solicitacoesAgendamento';
 import { agendarJobDiarioCobrancas, iniciarWorkerDiarioCobrancas } from './cobrancas';
+import { iniciarWorkerEmails } from './emails';
 
 type Logger = { info: (msg: string) => void; error?: (...args: unknown[]) => void };
 
@@ -41,6 +44,7 @@ export async function iniciarWorkers(log: Logger = console): Promise<void> {
     iniciarWorkerDiarioRetornos(),
     iniciarWorkerExpirarSolicitacoes(),
     iniciarWorkerDiarioCobrancas(),
+    iniciarWorkerEmails(),
   ];
   for (const w of workers) {
     w.on('error', (erro) => (log.error ?? console.error)(`Worker ${w.name}: ${erro.message}`));
@@ -52,6 +56,6 @@ export async function iniciarWorkers(log: Logger = console): Promise<void> {
   await agendarJobDiarioCobrancas();
   log.info(
     'Workers: envio-whatsapp (20–40 s por clínica), lembretes (09:00), financeiro-recorrencias (06:00), ' +
-      'retornos (09:30), solicitacoes-agendamento (de hora em hora) e cobrancas (07:00) iniciados.',
+      'retornos (09:30), solicitacoes-agendamento (de hora em hora), cobrancas (07:00) e emails iniciados.',
   );
 }

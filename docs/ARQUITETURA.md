@@ -47,7 +47,8 @@ Menus e papéis por rota: `apps/web/src/rotas/navegacao.ts` (`MENU_CLINICA`, `ME
 - Filtro por `clinica_id` aplicado automaticamente na camada de acesso a dados (extensão do Prisma —
   `request.db`, `plugins/tenant.ts`); fora do HTTP, `criarDbTenant(clinicaId)`.
 - `cobrancas` (plataforma, com `clinica_id`) é lida pela clínica via `request.db` em modo somente leitura;
-  `gateways_pagamento` e `eventos_gateway` são proibidos via `request.db`.
+  `gateways_pagamento`, `eventos_gateway` e as tabelas de e-mail (`configuracao_email`, `modelos_email`,
+  `emails_enviados`, `tokens_redefinicao_senha`) são proibidos via `request.db`.
 - Futuro: Row Level Security no Postgres como segunda barreira.
 
 ## 4. Planos e recursos
@@ -114,7 +115,11 @@ O teste grátis **não tem prazo de expiração**; 3 mensagens cabem um lembrete
 1. Visitante preenche `/cadastro`: nome da clínica, CNPJ/CPF, responsável, e-mail, telefone, senha.
 2. Sistema cria, em transação: `clinica` (com `slug` único gerado do nome) + `usuario` (papel `admin`) +
    `assinatura` no plano marcado como `plano_cadastro`, status `teste`.
-3. Onboarding (`/onboarding`): cadastrar profissional → grade de horários → convênios → conectar WhatsApp.
+3. Depois do commit sai o e-mail de **boas-vindas** (login e link de acesso — nunca a senha).
+4. Onboarding (`/onboarding`): cadastrar profissional → grade de horários → convênios → conectar WhatsApp.
+
+Senha esquecida: `/esqueci-senha` envia um link de uso único (1 h) por e-mail; a troca derruba as sessões abertas.
+E-mails transacionais em `docs/FASE2.md` §14.
 
 ## 6. Papéis na clínica
 
@@ -166,6 +171,12 @@ Fonte da verdade: `apps/api/prisma/schema.prisma`. Migrations (`apps/api/prisma/
   liberado quando paga), payload
 - `eventos_gateway` — webhooks recebidos: gateway, id_evento, tipo, payload, processado_em, erro;
   idempotência por `(gateway, id_evento)`
+- `configuracao_email` — linha única: SMTP (host, porta, TLS, usuário, senha cifrada), remetente, responder-para, ativo
+- `modelos_email` — por `tipo` (`boas_vindas|redefinir_senha|pagamento_confirmado|aviso_renovacao|pagamento_renovado`):
+  assunto, corpo, texto do botão, ativo (sem linha = texto padrão do código)
+- `emails_enviados` — histórico: tipo, referencia, clinica_id?, destinatario, assunto, html, texto, status
+  `pendente|enviado|falhou|ignorado`, erro, tentativas; único `(tipo, referencia, destinatario)`
+- `tokens_redefinicao_senha` — usuario_id, token_hash (SHA-256), expira_em (1 h), usado_em, ip
 
 ### Clínica (todas com `clinica_id`)
 
@@ -313,12 +324,13 @@ O contrato inicial previa `GET /bloqueios`; ficou assim (sem alias):
 
 | Módulo | Rotas |
 |---|---|
-| `auth` | `/auth/admin/login`, `/auth/login`, `/auth/cadastro` |
+| `auth` | `/auth/admin/login`, `/auth/login`, `/auth/cadastro`, `/auth/esqueci-senha`, `/auth/redefinir-senha` (+ `/validar`) |
 | `me` | `/me`, `/me/onboarding`, `/me/clinica`, `/admin/me` |
 | `admin-planos` | `/admin/recursos`, `/admin/planos*` |
 | `admin-clinicas` | `/admin/dashboard`, `/admin/clinicas*` (inclui `PUT /admin/clinicas/:id/assinatura`) |
 | `admin-cobranca` | `/admin/cobranca/*` (+ `cobrancas/:id/pagar-manual`), `/cobrancas/minhas`, `POST /webhooks/pagamentos/:gateway` |
 | `contratacao` | `GET /publico/planos` (público), `GET/POST /contratacao` (admin da clínica) |
+| `admin-email` | `/admin/email/*` (configuração SMTP, modelos, envios) |
 | `profissionais` | `/profissionais*` (+ `/horarios`, `/profissionais/bloqueios*`) |
 | `convenios` | `/convenios*` |
 | `usuarios` | `/usuarios*` (+ `/usuarios/:id/senha`) |
@@ -343,9 +355,10 @@ papéis e regras. No front, todas são chamadas com o prefixo `/api` (proxy do V
 | `envio-whatsapp` | sob demanda | envia mensagens com intervalo 20–40 s por clínica |
 | `lembretes` | 09:00 | enfileira lembretes de amanhã |
 | `financeiro-recorrencias` | 06:00 | gera títulos das recorrências (mês corrente e próximo) |
-| `cobrancas` | 07:00 | vence cobranças, gera as do próximo ciclo, aplica tolerância |
+| `cobrancas` | 07:00 | vence cobranças, gera as do próximo ciclo, aplica tolerância, avisa renovação (2 dias antes) |
 | `retornos` | 09:30 | reconcilia retornos e envia convites |
 | `solicitacoes-agendamento` | minuto 15 de cada hora | expira solicitações pendentes cujo horário passou |
+| `emails` | sob demanda | envia e-mails transacionais (SMTP), 5 tentativas com espera crescente |
 
 Em dev rodam no processo da API (`EXECUTAR_WORKERS=true`); em produção, no container `worker`.
 

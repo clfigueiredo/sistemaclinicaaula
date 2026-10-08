@@ -3,14 +3,15 @@
 SaaS multi-tenant de gestão para clínicas particulares: agenda, pacientes, prontuário eletrônico com anexos,
 lembretes e confirmação pelo WhatsApp, financeiro (caixa, contas a pagar/receber, recorrências, repasses),
 agendamento online com aprovação da recepção, lista de espera, retornos, receituário/atestado em PDF e
-dashboard. O dono do SaaS gerencia planos, clínicas e a cobrança automática (Asaas, Stripe ou Mercado Pago)
-num painel super admin. Cada clínica é totalmente isolada (`clinica_id`).
+dashboard, além de e-mails automáticos (boas-vindas, esqueci minha senha, pagamento confirmado, aviso de
+renovação e recibo da mensalidade). O dono do SaaS gerencia planos, clínicas, a cobrança automática (Asaas, Stripe
+ou Mercado Pago) e os e-mails (Resend, textos editáveis) num painel super admin. Cada clínica é totalmente isolada (`clinica_id`).
 
 **Stack:** React 19 + Vite + Tailwind/shadcn (web) · Node + Fastify + Zod (API) · PostgreSQL + Prisma ·
-Redis + BullMQ · WPPConnect (WhatsApp) · Docker / Caddy.
+Redis + BullMQ · WPPConnect (WhatsApp) · SMTP/Resend (e-mail) · Docker / Caddy.
 
-**Status:** MVP e Fase 2 concluídos. Pendentes: teste do WhatsApp com celular real, gateways em sandbox com
-credenciais reais e o primeiro deploy na VPS.
+**Status:** MVP, Fase 2, contratação de planos e e-mails transacionais concluídos; homologação na VPS. Pendentes:
+teste do WhatsApp com celular real, demais fluxos do gateway em sandbox e configurar o Resend (`docs/DEPLOY.md` §5).
 
 ## Como subir (Windows, desenvolvimento)
 
@@ -129,6 +130,9 @@ O sistema já sai configurado — não precisa criar plano nem clínica na mão.
 - **Novas clínicas** se cadastram sozinhas em `app.seudominio.com.br/cadastro` (entram no Teste grátis).
 - (Opcional) Em **Gateways** no super admin, configure e **ative** o gateway de pagamento (Asaas, Stripe ou Mercado
   Pago). Cobrança vencida além da tolerância **suspende o acesso** da clínica até o pagamento (acompanhe em **Cobranças**).
+- **E-mails** (super admin → **E-mails**): siga o tutorial da tela para ligar o Resend (conta grátis + DNS do
+  subdomínio de envio). Ali também dá para editar os textos dos e-mails e ver o histórico de envios. Enquanto não
+  for configurado, nenhum e-mail sai (ficam como "Ignorado").
 
 ### Comandos úteis (na VPS)
 

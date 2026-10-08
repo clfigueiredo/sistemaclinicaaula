@@ -544,3 +544,62 @@ Testes: `apps/api/test/contratacao.test.ts` (landing, opções do plano, contrat
 contratação abandonada não vence a assinatura); `recursos.test.ts` e `financeiro.test.ts` ajustados ao bloqueio total.
 Asaas sandbox: Pix só aparece com chave Pix cadastrada na conta sandbox; cartão de teste aprovado
 `4444 4444 4444 4444` / CVV `123`; valor mínimo de cobrança com "pergunte ao cliente" (vários métodos) é R$ 5,00.
+
+## 14. E-mails transacionais (migration `20261009000000_emails_transacionais`)
+
+Decisões do usuário (08/10/2026): provedor **Resend** via SMTP (código genérico — serve Brevo, SES, Hostinger…),
+configurado no painel do super admin (não em variáveis de ambiente); **todos os textos editáveis** no painel; super
+admin fica fora do "esqueci a senha" (continua com `deploy/acessos.sh`).
+
+**Modelo** (tabelas de plataforma, **proibidas via `request.db`** — só prisma cru):
+
+| Tabela | Conteúdo |
+|---|---|
+| `configuracao_email` | linha única (id = 1): `ativo`, `smtp_host/porta/seguro/usuario`, `smtp_senha_cifrada` (AES-256-GCM, `utils/cripto.ts`) + `smtp_senha_final`, `remetente_nome/email`, `responder_para` |
+| `modelos_email` | PK `tipo`: `assunto`, `corpo`, `texto_botao`, `ativo`. Sem linha ⇒ usa o texto padrão do código |
+| `emails_enviados` | histórico: `tipo`, `referencia`, `clinica_id?`, `destinatario`, `assunto`, `html`, `texto`, `status` (`pendente/enviado/falhou/ignorado`), `erro`, `tentativas`, `id_externo`. **Único `(tipo, referencia, destinatario)`** ⇒ o mesmo evento nunca gera dois e-mails |
+| `tokens_redefinicao_senha` | `usuario_id`, `token_hash` (SHA-256), `expira_em` (1 h), `usado_em`, `ip`. O link com o token só existe no histórico enquanto o e-mail está `pendente`; depois é mascarado (`token=••••`), o detalhe do painel sempre mascara e esse tipo não é reenviado. Pedido novo invalida os links anteriores |
+
+**Serviço** (`servicos/email/`, mesmo princípio do `whatsappService`): `enfileirarEmail({ tipo, para, variaveis,
+referencia, clinicaId })` monta o e-mail com o modelo em uso, grava o histórico e põe um job na fila
+`NOMES_FILAS.EMAILS` (`workers/emails.ts`, 5 tentativas, espera exponencial). **Nunca lança** e deve ser chamado
+**depois do commit** — e-mail nunca derruba cadastro, webhook ou job. Envio desligado/incompleto ⇒ registro
+`ignorado/email_desativado`; modelo desligado ⇒ `ignorado/modelo_desligado`. Provedor: `smtpAdapter.ts`
+(nodemailer); `fakeAdapter.ts` + `definirProvedorEmail`/`definirEnfileiradorEmail` nos testes.
+
+**Montagem** (`renderizar.ts`): layout HTML fixo (cabeçalho com o nome do remetente, botão, rodapé) + versão texto.
+O corpo aceita marcação simples — linha em branco = parágrafo, `**negrito**`, linhas `- ` = lista — e variáveis
+`{nome}`. Texto do modelo e **valores** das variáveis são escapados (ninguém injeta HTML pelo nome da clínica); o
+botão só aparece com link `http(s)`. Variáveis de cada tipo: `CATALOGO_EMAILS` (`modelosPadrao.ts`).
+
+| Tipo | Quando | Referência | Destinatários |
+|---|---|---|---|
+| `boas_vindas` | `POST /auth/cadastro` (depois do commit). **A senha nunca vai no e-mail** | `usuario.id` | e-mail do cadastro |
+| `redefinir_senha` | `POST /auth/esqueci-senha` — um e-mail por clínica em que o e-mail tem usuário ativo. Não pode ser desligado | `token.id` | o usuário |
+| `pagamento_confirmado` | 1ª confirmação (webhook ou baixa manual) de cobrança **com** `plano_contratado_id` que liberou o plano | `cobranca.id` | admin principal + `clinicas.email` (se diferente) |
+| `aviso_renovacao` | job de cobranças (07:00): mensalidade `pendente` com `link_pagamento` que vence em **2 dias** (`DIAS_AVISO_RENOVACAO`) | `cobranca.id` | idem |
+| `pagamento_renovado` | 1ª confirmação de mensalidade (sem `plano_contratado_id`); `{parcela}` = posição entre as cobranças pagas da clínica (a contratação é a 1ª; estornadas não contam) | `cobranca.id` | idem |
+
+**Esqueci minha senha** (módulo `auth`, prisma cru):
+
+| Rota | Regras |
+|---|---|
+| `POST /auth/esqueci-senha` `{ email }` | **sempre 204** (não revela se o e-mail existe); rate limit por IP e no máx. 3 links por usuário por hora; só usuário ativo de clínica ativa (assinatura suspensa pode — o admin precisa entrar para pagar) |
+| `GET /auth/redefinir-senha/validar?token=` | `{ valido, clinica, email (mascarado) }` ou 400 `token_invalido` |
+| `POST /auth/redefinir-senha` `{ token, senha }` | uso único (trava o token), grava a senha + `senha_alterada_em` (**derruba as sessões abertas**) e invalida os outros links do usuário; 204 |
+
+Web: `/esqueci-senha` e `/redefinir-senha?token=` (públicas, `paginas/publico/`), link "Esqueci minha senha" no Login.
+
+**Painel do super admin — menu E-mails** (`/admin/email`, módulo `admin-email`, prefixo `/admin/email`):
+abas **Configuração** (SMTP + "Preencher para o Resend" + "Enviar e-mail de teste" + **tutorial do Resend** passo a
+passo, com DNS na Hostinger), **Modelos** (editar assunto/corpo/botão, ligar/desligar, variáveis clicáveis,
+pré-visualização ao vivo, "Enviar teste para mim", "Restaurar texto padrão") e **Envios** (histórico com filtros, ver
+o e-mail enviado, reenviar os que falharam/ficaram ignorados). Rotas: `GET/PUT /configuracao`,
+`POST /configuracao/testar`, `GET /modelos`, `PUT/DELETE /modelos/:tipo`, `POST /modelos/:tipo/previa`,
+`POST /modelos/:tipo/teste`, `GET /envios`, `GET /envios/:id`, `POST /envios/:id/reenviar`.
+
+**Dev:** o `docker-compose.yml` sobe o **Mailpit** (http://localhost:8025) — configure no painel host `127.0.0.1`,
+porta `1025`, TLS implícito desligado, usuário/senha quaisquer. Nenhum e-mail sai para a internet.
+
+Testes: `test/email-servico.test.ts` (montagem/escape, fila, idempotência), `test/admin-email.test.ts`,
+`test/esqueci-senha.test.ts`, `test/emails-cobranca.test.ts`.

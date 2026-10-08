@@ -277,6 +277,25 @@ enum MetodoCobranca {
   @@map("metodo_cobranca")
 }
 
+enum TipoEmail {
+  boas_vindas
+  redefinir_senha
+  pagamento_confirmado
+  aviso_renovacao
+  pagamento_renovado
+
+  @@map("tipo_email")
+}
+
+enum StatusEmail {
+  pendente
+  enviado
+  falhou
+  ignorado
+
+  @@map("status_email")
+}
+
 enum StatusCobranca {
   pendente
   paga
@@ -401,6 +420,7 @@ model Clinica {
   whatsapp_sessao           WhatsappSessao?
   mensagens_whatsapp        MensagemWhatsapp[]
   logs_acesso               LogAcesso[]
+  emails_enviados           EmailEnviado[]
 
   @@map("clinicas")
 }
@@ -544,6 +564,7 @@ model Usuario {
   registros_prontuario  ProntuarioRegistro[]     @relation("RegistroAutor")
   anexos_enviados       Anexo[]                  @relation("AnexoEnviadoPor")
   logs_acesso           LogAcesso[]
+  tokens_redefinicao    TokenRedefinicaoSenha[]
   documentos_emitidos   DocumentoClinico[]       @relation("DocumentoAutor")
   movimentacoes_criadas MovimentacaoFinanceira[] @relation("MovimentacaoCriadaPor")
 
@@ -1227,4 +1248,85 @@ model Retorno {
   @@index([clinica_id, status, data_prevista])
   @@index([clinica_id, paciente_id])
   @@map("retornos")
+}
+
+// ============================================================================
+// E-mails transacionais (plataforma — acesso só pelo prisma cru; proibidos via request.db)
+// ============================================================================
+
+/// Configuração do envio (linha única, id = 1). SMTP genérico (Resend, Brevo, SES, Hostinger…).
+model ConfiguracaoEmail {
+  id                 Int      @id @default(1)
+  ativo              Boolean  @default(false)
+  smtp_host          String   @default("smtp.resend.com")
+  smtp_porta         Int      @default(465)
+  /// true = TLS implícito (porta 465); false = STARTTLS (porta 587).
+  smtp_seguro        Boolean  @default(true)
+  smtp_usuario       String   @default("resend")
+  /// Senha / API key cifrada (utils/cripto.ts).
+  smtp_senha_cifrada String?
+  smtp_senha_final   String?  @db.VarChar(4)
+  remetente_nome     String   @default("Sistema Clínica")
+  remetente_email    String?
+  responder_para     String?
+  atualizado_em      DateTime @updatedAt
+
+  @@map("configuracao_email")
+}
+
+/// Texto editável de cada e-mail. Sem linha para o tipo ⇒ usa o padrão do código (servicos/email/modelosPadrao.ts).
+model ModeloEmail {
+  tipo          TipoEmail @id
+  assunto       String
+  /// Corpo com marcação simples (parágrafos, **negrito**, listas "- ") e variáveis {nome}.
+  corpo         String
+  texto_botao   String
+  ativo         Boolean   @default(true)
+  atualizado_em DateTime  @updatedAt
+
+  @@map("modelos_email")
+}
+
+/// Histórico de envios. (tipo, referencia) único ⇒ o mesmo evento nunca gera dois e-mails.
+model EmailEnviado {
+  id            String      @id @default(uuid()) @db.Uuid
+  tipo          TipoEmail
+  /// Chave de idempotência (ex.: id da cobrança, id do usuário, id do token). null = sem controle (teste).
+  referencia    String?
+  clinica_id    String?     @db.Uuid
+  destinatario  String
+  assunto       String
+  /// HTML e texto já montados no momento do enfileiramento.
+  html          String
+  texto         String
+  status        StatusEmail @default(pendente)
+  erro          String?
+  tentativas    Int         @default(0)
+  id_externo    String?
+  enviado_em    DateTime?
+  criado_em     DateTime    @default(now())
+  atualizado_em DateTime    @updatedAt
+
+  clinica Clinica? @relation(fields: [clinica_id], references: [id], onDelete: SetNull)
+
+  @@unique([tipo, referencia, destinatario])
+  @@index([criado_em])
+  @@index([status, criado_em])
+  @@map("emails_enviados")
+}
+
+/// Link de "esqueci minha senha" (usuário da clínica). Só o hash SHA-256 do token é gravado.
+model TokenRedefinicaoSenha {
+  id         String    @id @default(uuid()) @db.Uuid
+  usuario_id String    @db.Uuid
+  token_hash String    @unique @db.VarChar(64)
+  expira_em  DateTime
+  usado_em   DateTime?
+  ip         String?
+  criado_em  DateTime  @default(now())
+
+  usuario Usuario @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
+
+  @@index([usuario_id])
+  @@map("tokens_redefinicao_senha")
 }

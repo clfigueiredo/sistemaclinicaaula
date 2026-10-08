@@ -137,7 +137,25 @@ cobranças geradas em sandbox são ignorados quando o gateway já está em produ
 O WhatsApp de cada clínica é conectado pela própria clínica (menu WhatsApp → QR code); as sessões ficam nos
 volumes `wpp_tokens`/`wpp_userdata`.
 
-## 5. Backup diário
+## 5. E-mails (Resend)
+
+Os e-mails do sistema (boas-vindas, esqueci a senha, pagamento confirmado, aviso de renovação e recibo da
+mensalidade) saem por SMTP configurado no painel do super admin: **`/admin/email` → Configuração** (o tutorial
+completo está na própria tela). Resumo:
+
+1. Conta em [resend.com](https://resend.com) → **Domains → Add Domain** com um **subdomínio só de envio**
+   (ex.: `avisos.seudominio.com.br`) — não interfere no e-mail que o domínio já usa.
+2. Copie os registros que o Resend mostrar (DKIM `resend._domainkey.avisos`, MX e SPF em `send.avisos`) para o DNS
+   do domínio (Hostinger: hPanel → Domínios → DNS). Não apague o SPF/MX do domínio principal. Se não houver
+   DMARC, crie TXT `_dmarc` = `v=DMARC1; p=none;` (passe para `p=quarantine` depois de algumas semanas).
+3. **Verify** no Resend; **API Keys → Create** (Sending access, só o domínio).
+4. No painel: "Preencher para o Resend" (`smtp.resend.com`, 465, TLS, usuário `resend`), cole a API key, remetente
+   `nao-responda@avisos.seudominio.com.br`, "Responder para" = um e-mail de suporte lido por alguém. Salve, envie o
+   teste para o endereço do [mail-tester.com](https://www.mail-tester.com) (meta ≥ 9/10) e ligue **Envio ativo**.
+
+Enquanto o envio estiver desligado, nada sai e os e-mails ficam como "ignorado" em **E-mails → Envios**.
+
+## 6. Backup diário
 
 `deploy/backup.sh` gera `banco-<data>.dump` (`pg_dump -Fc`) e `anexos-<data>.tar.gz` (volume `uploads`) em
 `/var/backups/sistema-clinica` e apaga os com mais de 7 dias. Variáveis opcionais: `BACKUP_DIR`,
@@ -168,12 +186,13 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T api \
   tar xzf - -C /app/apps/api < /var/backups/sistema-clinica/anexos-AAAA-MM-DD_HHMM.tar.gz
 ```
 
-## 6. Checklist pós-deploy
+## 7. Checklist pós-deploy
 
 - [ ] Os três domínios abrem com certificado válido (landing, `DOMINIO_APP/login`, `DOMINIO_ADMIN/admin/login`);
       `https://DOMINIO_APP/api/saude` responde `ok`.
 - [ ] Super admin entra em `/admin/login`; existe um plano marcado como plano de cadastro.
-- [ ] Auto-cadastro em `/cadastro` cria clínica em teste grátis.
+- [ ] Auto-cadastro em `/cadastro` cria clínica em teste grátis e o e-mail de boas-vindas chega (E-mails → Envios).
+- [ ] "Esqueci minha senha" no login envia o link e a troca funciona.
 - [ ] WhatsApp de uma clínica de teste conecta pelo QR e o lembrete/resposta funciona (webhook interno).
 - [ ] Gateway em produção: cobrança de valor baixo paga e confirmada pelo webhook.
 - [ ] `docker compose ... logs worker` mostra os workers iniciados; cron do backup gerando arquivos.

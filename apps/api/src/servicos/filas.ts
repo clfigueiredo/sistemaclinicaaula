@@ -26,6 +26,8 @@ export const NOMES_FILAS = {
   SOLICITACOES_AGENDAMENTO: 'solicitacoes-agendamento',
   /** Cobrança do SaaS: job diário que marca cobranças vencidas e bloqueia após a tolerância. Dados: JobCobrancas. */
   COBRANCAS: 'cobrancas',
+  /** E-mails transacionais (servicos/email/envio.ts): um job por e-mail. Dados: JobEnvioEmail. */
+  EMAILS: 'emails',
 } as const;
 
 export type NomeFila = (typeof NOMES_FILAS)[keyof typeof NOMES_FILAS];
@@ -39,6 +41,7 @@ export type JobLembretes = { data?: string };
 /** Jobs diários da fase 2: sem clinicaId = todas as clínicas; `data` = referência ISO (testes/reprocesso). */
 export type JobPorClinica = { clinicaId?: string; data?: string };
 export type JobCobrancas = { data?: string };
+export type JobEnvioEmail = { emailId: string };
 
 export const OPCOES_PADRAO_JOB: JobsOptions = {
   attempts: 3,

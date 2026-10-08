@@ -29,6 +29,8 @@ import * as dashboard from './dashboard';
 import * as adminCobranca from './admin-cobranca';
 // Contratação de plano pela clínica + planos da landing page
 import * as contratacao from './contratacao';
+// E-mails transacionais (configuração, modelos e histórico — super admin)
+import * as adminEmail from './admin-email';
 
 type ModuloApi = { default: FastifyPluginAsyncZod; prefixo: string };
 
@@ -52,6 +54,7 @@ export const MODULOS: Record<string, ModuloApi> = {
   dashboard,
   'admin-cobranca': adminCobranca,
   contratacao,
+  'admin-email': adminEmail,
 };
 
 export async function registrarModulos(app: FastifyInstance): Promise<void> {

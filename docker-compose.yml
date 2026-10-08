@@ -44,6 +44,20 @@ services:
       timeout: 3s
       retries: 20
 
+  # Mailpit (só DEV): "caixa de e-mail" falsa que pega TODOS os e-mails enviados pelo sistema — nada sai para a
+  # internet. Interface em http://localhost:8025. No painel do super admin (/admin/email) configure:
+  # host 127.0.0.1 (ou localhost), porta 1025, TLS implícito DESLIGADO, usuário/senha qualquer (ex.: dev/dev).
+  mailpit:
+    image: axllent/mailpit:v1.27
+    container_name: clinica-mailpit
+    restart: unless-stopped
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+
   # WPPConnect Server (não oficial). Uma sessão por clínica.
   # A API se comunica com ele SOMENTE via src/servicos/whatsapp/whatsappService.ts.
   # O webhook chama a API rodando no host (fora do Docker) — por isso host.docker.internal.

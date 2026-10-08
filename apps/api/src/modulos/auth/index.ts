@@ -11,8 +11,21 @@
  *        assinatura (status 'teste', expira_em null) no plano marcado como plano_cadastro. A clínica recebe
  *        um `slug` único gerado do nome (utils/slug.ts — URL pública do agendamento online).
  *
- * Rate limit: 10 tentativas/minuto por IP nas rotas de login e 5/minuto no cadastro (IP real só com
- * TRUST_PROXY configurado atrás do proxy). E-mail inexistente roda bcrypt contra HASH_FALSO (timing).
+ *        Depois do commit enfileira o e-mail de boas-vindas (servicos/email — a senha NUNCA vai no e-mail).
+ *
+ * Esqueci minha senha (lógica em ./redefinicaoSenha.ts; usuários da clínica, não o super admin):
+ *   POST /auth/esqueci-senha                 { email }         → 204 SEMPRE (não revela se o e-mail existe).
+ *        O trabalho roda em segundo plano, depois da resposta (tempo igual para e-mail existente ou não): um link
+ *        por usuário ativo com o e-mail em clínica ativa (o e-mail é único por clínica), máx. 3 links/hora por
+ *        usuário, válido por 1 hora; e-mail `redefinir_senha` com o link. Assinatura suspensa não impede.
+ *   GET  /auth/redefinir-senha/validar?token= → { valido: true, clinica, email (mascarado) }
+ *                                               | 400 { erro: 'token_invalido' }
+ *   POST /auth/redefinir-senha               { token, senha }  → 204 | 400 token_invalido. Troca a senha, grava
+ *        senha_alterada_em (derruba as sessões abertas) e invalida o link usado e os outros pendentes do usuário.
+ *
+ * Rate limit por IP (IP real só com TRUST_PROXY configurado atrás do proxy): 10/minuto nas rotas de login,
+ * 5/minuto no cadastro, 3/minuto no esqueci-senha e 10/minuto na validação/redefinição. E-mail inexistente roda
+ * bcrypt contra HASH_FALSO no login (timing).
  */
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -22,6 +35,13 @@ import { ErroNegocio } from '../../utils/erros';
 import { somenteDigitos, validarCpfOuCnpj } from '../../utils/documento';
 import { gerarSlugUnico } from '../../utils/slug';
 import { conferirSenha, conferirSenhaFalsa, gerarHashSenha } from '../../utils/senha';
+import { enfileirarEmail, linksSistema } from '../../servicos/email';
+import {
+  aguardarSolicitacoesRedefinicao,
+  dispararSolicitacaoRedefinicao,
+  redefinirSenhaComToken,
+  validarTokenRedefinicao,
+} from './redefinicaoSenha';
 
 export const prefixo = '/auth';
 
@@ -37,8 +57,30 @@ const credenciais = z.object({
 });
 
 const limiteLogin = { rateLimit: { max: 10, timeWindow: '1 minute' } };
+const limiteEsqueciSenha = { rateLimit: { max: 3, timeWindow: '1 minute' } };
+const limiteRedefinicao = { rateLimit: { max: 10, timeWindow: '1 minute' } };
+
+/** Mesma regra de senha do cadastro e da redefinição. */
+const senhaNova = z.string().min(6, 'A senha deve ter pelo menos 6 caracteres').max(100);
+const tokenRedefinicao = z.string().trim().min(1, 'Link inválido').max(200);
 
 const erroCredenciais = () => new ErroNegocio(401, 'credenciais_invalidas', 'E-mail ou senha incorretos.');
+
+/** Anti-abuso: o auto-cadastro não verifica o e-mail, então no máx. 1 boas-vindas por destinatário a cada 24 h
+ * (sem isso, cadastros em série com o e-mail de outra pessoa virariam um relé de mensagens pelo nosso domínio). */
+const JANELA_BOAS_VINDAS_MS = 24 * 60 * 60 * 1000;
+
+async function enviarBoasVindas(dados: Parameters<typeof enfileirarEmail>[0]) {
+  const recentes = await prisma.emailEnviado.count({
+    where: {
+      tipo: 'boas_vindas',
+      destinatario: dados.para.trim().toLowerCase(),
+      criado_em: { gte: new Date(Date.now() - JANELA_BOAS_VINDAS_MS) },
+    },
+  });
+  if (recentes > 0) return;
+  await enfileirarEmail(dados);
+}
 
 const modulo: FastifyPluginAsyncZod = async (app) => {
   // ------------------------------------------------------------------ super admin
@@ -125,7 +167,7 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
       .string()
       .transform(somenteDigitos)
       .refine((t) => t.length >= 10 && t.length <= 13, 'Telefone inválido'),
-    senha: z.string().min(6, 'A senha deve ter pelo menos 6 caracteres').max(100),
+    senha: senhaNova,
   });
 
   app.post(
@@ -178,6 +220,23 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
       });
 
       const { clinica, usuario } = resultado;
+
+      // Boas-vindas depois do commit. enfileirarEmail não lança e não é aguardado: não atrasa nem derruba a resposta.
+      const links = linksSistema();
+      void enviarBoasVindas({
+        tipo: 'boas_vindas',
+        para: usuario.email,
+        referencia: usuario.id,
+        clinicaId: clinica.id,
+        variaveis: {
+          responsavel: dados.responsavel,
+          clinica: clinica.nome,
+          email: usuario.email,
+          link_acesso: links.acesso,
+          link_esqueci_senha: links.esqueciSenha,
+        },
+      }).catch((erro: unknown) => request.log.error({ err: erro }, 'Falha ao enfileirar e-mail de boas-vindas'));
+
       reply.status(201);
       return {
         token: assinarTokenClinica(app, {
@@ -189,6 +248,37 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
         usuario: { id: usuario.id, nome: usuario.nome, email: usuario.email, papel: usuario.papel, profissionalId: null },
         clinica: { id: clinica.id, nome: clinica.nome },
       };
+    },
+  );
+
+  // ------------------------------------------------------------------ esqueci minha senha
+  // Ao desligar a API, espera os pedidos em segundo plano terminarem (não deixa link gerado sem e-mail).
+  app.addHook('onClose', async () => {
+    await aguardarSolicitacoesRedefinicao();
+  });
+
+  app.post(
+    '/esqueci-senha',
+    { config: limiteEsqueciSenha, schema: { body: z.object({ email }) } },
+    async (request, reply) => {
+      // Sem await: a resposta sai antes de qualquer consulta (sem enumeração por tempo). Erros só no log.
+      dispararSolicitacaoRedefinicao(request.body.email, request.ip, request.log);
+      return reply.status(204).send();
+    },
+  );
+
+  app.get(
+    '/redefinir-senha/validar',
+    { config: limiteRedefinicao, schema: { querystring: z.object({ token: tokenRedefinicao }) } },
+    async (request) => validarTokenRedefinicao(request.query.token),
+  );
+
+  app.post(
+    '/redefinir-senha',
+    { config: limiteRedefinicao, schema: { body: z.object({ token: tokenRedefinicao, senha: senhaNova }) } },
+    async (request, reply) => {
+      await redefinirSenhaComToken(request.body.token, request.body.senha);
+      return reply.status(204).send();
     },
   );
 };

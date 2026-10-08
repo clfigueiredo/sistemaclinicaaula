@@ -100,7 +100,12 @@ export default function PaginaLogin() {
               name="senha"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Senha</FormLabel>
+                  <div className="flex items-center justify-between gap-2">
+                    <FormLabel>Senha</FormLabel>
+                    <Link to="/esqueci-senha" className="text-xs font-medium text-primary hover:underline">
+                      Esqueci minha senha
+                    </Link>
+                  </div>
                   <FormControl>
                     <Input type="password" autoComplete="current-password" {...field} />
                   </FormControl>

@@ -55,6 +55,7 @@ docker compose ps           # postgres e redis devem ficar "healthy"
 |---|---|---|
 | Postgres 16 | 5432 | usuário/senha/banco `clinica` (volume nomeado `postgres_dados`) |
 | Redis 7 | 6379 | filas BullMQ (volume `redis_dados`), com senha `REDIS_PASSWORD` |
+| Mailpit | 1025 (SMTP) / 8025 (web) | pega todos os e-mails do sistema sem enviar — veja em http://localhost:8025 (§4.5) |
 | WPPConnect Server | 21465 | Swagger em http://localhost:21465/api-docs; webhook → `http://host.docker.internal:3333/webhooks/whatsapp?token=WEBHOOK_TOKEN` |
 
 Volumes **nomeados** (não bind mount) porque o disco do projeto é de rede.
@@ -236,6 +237,19 @@ cloudflared tunnel --url http://localhost:3333  # anote a URL https://<algo>.try
 
 Sem túnel dá para testar tudo menos a confirmação automática de pagamento. Sem gateway ativo nada é gerado.
 Se a URL do túnel mudar, atualize `API_URL_PUBLICA`, reinicie a API e o cadastro do webhook no gateway.
+
+### 4.5 E-mails (Mailpit)
+
+1. Super admin → **E-mails → Configuração**: host `127.0.0.1`, porta `1025`, **TLS implícito desligado**, usuário e
+   senha quaisquer (ex.: `dev`/`dev`), e-mail do remetente qualquer (ex.: `nao-responda@clinica.local`). Salve, clique
+   em **Enviar e-mail de teste** e ligue **Envio ativo**.
+2. Abra http://localhost:8025 — o teste aparece lá.
+3. Cadastre uma clínica em `/cadastro` ⇒ e-mail de boas-vindas. No login, **Esqueci minha senha** ⇒ e-mail com o
+   link; abra o link e troque a senha (as sessões abertas desse usuário caem).
+4. Pagamentos (§4.4): contratação paga ⇒ "Pagamento confirmado"; mensalidade paga ⇒ recibo com o nº da parcela;
+   mensalidade pendente vencendo em 2 dias ⇒ aviso no job das 07:00.
+5. **E-mails → Modelos**: edite um texto, veja a pré-visualização, "Enviar teste para mim" e "Restaurar texto padrão".
+   **Envios**: histórico, conteúdo e reenvio dos que falharam.
 
 ## 5. Problemas comuns
 
