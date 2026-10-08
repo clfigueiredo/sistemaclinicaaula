@@ -128,7 +128,9 @@ if command -v ufw >/dev/null 2>&1; then
 fi
 
 info "Construindo e subindo os containers (pode levar alguns minutos)..."
-compose up -d --build
+# Constrói antes do "up": o worker usa a imagem da API (sistema-clinica-api), que não existe em registry.
+compose build api caddy
+compose up -d
 
 info "Aguardando a API responder..."
 for _ in $(seq 1 60); do

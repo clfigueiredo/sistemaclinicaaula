@@ -107,7 +107,9 @@ services:
       - uploads:/app/apps/api/uploads
 
   worker:
+    # Reaproveita a imagem construída pelo serviço "api" — nunca tenta baixá-la de um registry.
     image: sistema-clinica-api
+    pull_policy: never
     container_name: clinica-worker
     restart: unless-stopped
     environment: *api-env
