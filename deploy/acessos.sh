@@ -13,7 +13,7 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 ARQ_ACESSOS="$(pwd)/ACESSOS.txt"
 
 [ -f "$ENV_FILE" ] || { echo "[erro] $ENV_FILE não encontrado em $(pwd)." >&2; exit 1; }
-valor_env() { grep -E "^$1=" "$ENV_FILE" | tail -n1 | cut -d= -f2-; }
+valor_env() { grep -E "^$1=" "$ENV_FILE" | tail -n1 | cut -d= -f2- || true; }
 DOMINIO_SITE="$(valor_env DOMINIO_SITE)"; DOMINIO_APP="$(valor_env DOMINIO_APP)"; DOMINIO_ADMIN="$(valor_env DOMINIO_ADMIN)"
 [ -n "$DOMINIO_SITE" ] && [ -n "$DOMINIO_APP" ] && [ -n "$DOMINIO_ADMIN" ]   || { echo "[erro] defina DOMINIO_SITE, DOMINIO_APP e DOMINIO_ADMIN no $ENV_FILE (rode o instalador)." >&2; exit 1; }
 MODO=instalar
@@ -27,7 +27,7 @@ SAIDA="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T -e DOM
 }
 
 # Lê "ACESSO|tipo|email|senha|estado"; avisos do Prisma e afins são ignorados.
-campo() { printf '%s\n' "$SAIDA" | grep -E "^ACESSO\|$1\|" | tail -n1 | cut -d'|' -f"$2"; }
+campo() { printf '%s\n' "$SAIDA" | grep -E "^ACESSO\|$1\|" | tail -n1 | cut -d'|' -f"$2" || true; }
 ADMIN_EMAIL="$(campo admin 3)"; ADMIN_SENHA="$(campo admin 4)"; ADMIN_ESTADO="$(campo admin 5)"
 CLIN_EMAIL="$(campo clinica 3)"; CLIN_SENHA="$(campo clinica 4)"; CLIN_ESTADO="$(campo clinica 5)"
 if [ -z "$ADMIN_ESTADO" ] || [ -z "$CLIN_ESTADO" ]; then
