@@ -15,11 +15,12 @@
 #   3. Gera .env.prod com TODOS os segredos aleatórios (openssl rand -hex 32). Se o .env.prod já existir,
 #      mantém os segredos (trocar CHAVE_CRIPTOGRAFIA/senha do Postgres quebraria os dados) e só atualiza o domínio.
 #   4. Libera 22/80/443 no ufw (se instalado), sobe o docker-compose.prod.yml e espera a API responder.
-#   5. Agenda o backup diário e cria o super admin (se ainda não houver) com senha aleatória
-#      (deploy/redefinir-admin.sh — rode-o depois para redefinir a senha).
+#   5. Agenda o backup diário e prepara o banco (deploy/acessos.sh): recursos, planos (com o de cadastro),
+#      super admin e a clínica "Minha Clínica" com usuário admin — senhas aleatórias, mostradas no fim e
+#      salvas em ACESSOS.txt na raiz do projeto. Novas senhas: ./deploy/acessos.sh --redefinir
 #
 # Variáveis opcionais: DIR_INSTALACAO (padrão /opt/sistema-clinica), REPO_URL, BRANCH (padrão main),
-# EMAIL_ACME (padrão admin@DOMINIO), ADMIN_EMAIL (padrão admin@DOMINIO).
+# EMAIL_ACME (padrão admin@DOMINIO).
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/clfigueiredo/sistemaclinicaaula.git}"
@@ -48,7 +49,6 @@ DOMINIO="$(printf '%s' "$DOMINIO" | tr '[:upper:]' '[:lower:]' | sed -E 's#^[a-z
 printf '%s' "$DOMINIO" | grep -Eq '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$' \
   || erro "domínio inválido: '$DOMINIO'."
 EMAIL_ACME="${EMAIL_ACME:-admin@$DOMINIO}"
-ADMIN_EMAIL_INFORMADO="${ADMIN_EMAIL:-}"
 info "Domínio: $DOMINIO"
 
 # --- 2. Dependências ----------------------------------------------------------------------------------------
@@ -148,15 +148,18 @@ LINHA_CRON="15 3 * * * cd $DIR_INSTALACAO && ./deploy/backup.sh >> /var/log/clin
 ( crontab -l 2>/dev/null | grep -vF 'deploy/backup.sh'; echo "$LINHA_CRON" ) | crontab -
 systemctl enable --now cron >/dev/null 2>&1 || true
 
+# --- 7. Banco inicial e acessos ----------------------------------------------------------------------------
+# Recursos, planos (com o de cadastro), super admin e "Minha Clínica" — senhas aleatórias, salvas em ACESSOS.txt.
+chmod +x deploy/acessos.sh
+info "Preparando o banco e os acessos..."
+./deploy/acessos.sh
+
 # --- Resumo -------------------------------------------------------------------------------------------------
 echo
 info "Instalação concluída!"
 echo "  Sistema:      https://$DOMINIO"
-echo "  Painel admin: https://$DOMINIO/admin/login"
-# Cria o super admin só se ainda não houver nenhum (senha aleatória, mostrada aqui e salva em /root).
-chmod +x deploy/redefinir-admin.sh
-./deploy/redefinir-admin.sh --se-nao-existir ${ADMIN_EMAIL_INFORMADO:+"$ADMIN_EMAIL_INFORMADO"}
 echo "  Segredos:     $DIR_INSTALACAO/$ENV_FILE (guarde uma cópia fora da VPS)"
 echo "  Backup:       diário às 03:15 em /var/backups/sistema-clinica"
+echo "  Acessos:      $DIR_INSTALACAO/ACESSOS.txt  (ver de novo: cat $DIR_INSTALACAO/ACESSOS.txt)"
 echo
-echo "Próximo passo: no painel admin, crie um plano e marque-o como 'plano de cadastro' (sem isso o /cadastro falha)."
+echo "Os acessos dos dois painéis estão no quadro acima. Se o HTTPS ainda não abrir, aguarde o DNS propagar."

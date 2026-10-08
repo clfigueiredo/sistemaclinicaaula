@@ -47,7 +47,8 @@ Sistema_Clinica/
 ├── iniciar-sistema.bat       # atalho Windows: docker compose up -d + npm run dev, log em logs/dev.log
 ├── docker-compose.yml        # DEV: postgres 16, redis 7 (com senha), wppconnect — portas só em 127.0.0.1
 ├── docker-compose.prod.yml   # PRODUÇÃO: + api, worker, caddy; sem portas internas; segredos obrigatórios
-├── deploy/                   # Dockerfile.api, Dockerfile.web (build do web + Caddy), Caddyfile, backup.sh
+├── deploy/                   # Dockerfile.api, Dockerfile.web (build do web + Caddy), Caddyfile, backup.sh,
+│                             # instalar-vps.sh (instalador: só pede o domínio), acessos.sh + inicializar-producao.cjs
 ├── .env.example / .env       # ÚNICO .env, na raiz (lido por compose, API, Prisma e testes)
 ├── package.json              # scripts orquestradores (dev, build, typecheck, test, db:*)
 ├── docs/ (ARQUITETURA.md, SETUP_LOCAL.md, DEPLOY.md, FASE2.md)

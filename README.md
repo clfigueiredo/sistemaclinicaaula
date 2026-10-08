@@ -70,32 +70,46 @@ Digite o domínio quando ele pedir e aguarde (5 a 15 minutos na primeira vez). O
 2. gera o `.env.prod` com senhas e chaves aleatórias;
 3. libera as portas 22, 80 e 443 no firewall;
 4. sobe banco, Redis, WhatsApp, API, worker e o Caddy (HTTPS automático com Let's Encrypt);
-5. cria o **super admin** com senha aleatória;
+5. prepara o banco: catálogo de recursos, planos **Teste grátis** (já marcado como plano de cadastro) e
+   **Profissional**, o **super admin** e a clínica **Minha Clínica** com um usuário admin;
 6. agenda o backup diário (03:15, em `/var/backups/sistema-clinica`).
 
-No final aparece um resumo como este — **anote a senha**:
+No final aparece o quadro com os **acessos dos dois painéis** (senhas aleatórias):
 
 ```
-==> Instalação concluída!
-  Sistema:      https://clinica.seudominio.com.br
-  Painel admin: https://clinica.seudominio.com.br/admin/login
-  Super admin:  admin@clinica.seudominio.com.br / Xk3...
+================================================================
+  ACESSOS DO SISTEMA
+================================================================
+  PAINEL SUPER ADMIN  https://clinica.seudominio.com.br/admin/login
+    E-mail: admin@clinica.seudominio.com.br
+    Senha:  Xk3...
+
+  PAINEL DA CLÍNICA   https://clinica.seudominio.com.br/login
+    E-mail: clinica@clinica.seudominio.com.br
+    Senha:  Pq9...
+================================================================
+  Salvo em: /opt/sistema-clinica/ACESSOS.txt
+================================================================
 ```
 
-A senha também fica salva em `/root/sistema-clinica-admin.txt` (apague o arquivo depois de anotar).
-Perdeu a senha ou ela não apareceu? Gere uma nova com:
+Os acessos ficam salvos em **`/opt/sistema-clinica/ACESSOS.txt`** (raiz do projeto, ao lado do `CLAUDE.md`;
+o arquivo não vai para o git). Para ver de novo ou gerar senhas novas:
 
 ```bash
-cd /opt/sistema-clinica && ./deploy/redefinir-admin.sh
+cat /opt/sistema-clinica/ACESSOS.txt                        # ver os acessos
+cd /opt/sistema-clinica && ./deploy/acessos.sh --redefinir  # senhas novas para os dois painéis
 ```
 
-### 4. Primeira configuração no painel
+### 4. Pronto para usar
 
-1. Acesse `https://SEU_DOMINIO/admin/login` com o super admin.
-2. Em **Planos**, crie um plano de teste grátis e marque-o como **plano de cadastro** — sem isso o
-   cadastro de clínicas em `https://SEU_DOMINIO/cadastro` não funciona.
-3. (Opcional) Em **Cobrança**, configure o gateway de pagamento (Asaas, Stripe ou Mercado Pago).
-4. Cadastre uma clínica em `/cadastro` e conecte o WhatsApp dela pelo QR code (menu **WhatsApp**).
+O sistema já sai configurado — não precisa criar plano nem clínica na mão.
+
+- **Painel super admin** (`/admin/login`): planos, clínicas, cobrança. Os planos “Teste grátis” e “Profissional”
+  podem ser editados à vontade.
+- **Painel da clínica** (`/login`): a “Minha Clínica” já está no plano Profissional, ativa. Troque o nome e os
+  dados em **Configurações**, cadastre profissionais e conecte o WhatsApp pelo QR code (menu **WhatsApp**).
+- **Novas clínicas** se cadastram sozinhas em `/cadastro` (entram no Teste grátis).
+- (Opcional) Em **Cobrança** no super admin, configure o gateway de pagamento (Asaas, Stripe ou Mercado Pago).
 
 ### Comandos úteis (na VPS)
 
@@ -108,7 +122,7 @@ dc logs -f api worker      # logs da API e dos jobs
 dc logs caddy              # logs do HTTPS/certificado
 dc restart api worker      # reiniciar
 ./deploy/backup.sh         # backup manual agora
-./deploy/redefinir-admin.sh  # nova senha aleatória para o super admin
+./deploy/acessos.sh --redefinir  # senhas novas para os dois painéis
 ```
 
 **Atualizar para a versão mais nova:** rode o mesmo comando do passo 3 (ou `sudo ./deploy/instalar-vps.sh`
@@ -121,8 +135,8 @@ dentro de `/opt/sistema-clinica`). Ele baixa o código novo, **mantém as senhas
 | Aviso “domínio não resolve” / site sem HTTPS | DNS ainda não aponta para a VPS. Corrija o registro `A`, espere propagar e rode `dc restart caddy`. |
 | Build parou com erro de memória (`Killed`) | VPS com pouca RAM. Use uma de 4 GB ou crie swap: `fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`. |
 | “a API não respondeu em 5 minutos” | Veja `dc logs api` (geralmente migration ou banco ainda subindo) e rode o instalador de novo. |
-| Senha do super admin não apareceu / esqueci | `cd /opt/sistema-clinica && ./deploy/redefinir-admin.sh` gera uma senha nova e mostra na tela. |
-| `/cadastro` dá erro | Falta marcar um plano como **plano de cadastro** no painel admin. |
+| Esqueci / perdi as senhas | `cat /opt/sistema-clinica/ACESSOS.txt` ou `./deploy/acessos.sh --redefinir` (gera novas e mostra na tela). |
+| `/cadastro` dá erro | Nenhum plano ativo marcado como **plano de cadastro** — marque um no painel super admin. |
 
 > **Importante:** guarde uma cópia do `/opt/sistema-clinica/.env.prod` fora da VPS. A `CHAVE_CRIPTOGRAFIA`
 > dele é necessária para ler as credenciais dos gateways num backup restaurado — nunca a troque depois de em uso.

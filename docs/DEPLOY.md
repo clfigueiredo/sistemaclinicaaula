@@ -27,8 +27,10 @@ curl -fsSL https://raw.githubusercontent.com/clfigueiredo/sistemaclinicaaula/mai
 
 O script (`deploy/instalar-vps.sh`) **só pergunta o domínio** e faz o resto: instala o Docker, clona o projeto em
 `/opt/sistema-clinica`, gera o `.env.prod` com todos os segredos aleatórios (`openssl rand -hex 32`), libera
-22/80/443 no `ufw`, sobe o compose de produção, cria o super admin com senha aleatória (salva em
-`/root/sistema-clinica-admin.txt`) e agenda o backup diário. Rodar de novo é seguro: um `.env.prod` existente
+22/80/443 no `ufw`, sobe o compose de produção, agenda o backup diário e prepara o banco com
+`deploy/acessos.sh` (catálogo de recursos, planos "Teste grátis" — plano de cadastro — e "Profissional", super admin
+e a clínica "Minha Clínica" com usuário admin). As senhas são aleatórias, aparecem no fim da instalação e ficam em
+`/opt/sistema-clinica/ACESSOS.txt` (fora do git); `./deploy/acessos.sh --redefinir` gera senhas novas. Rodar de novo é seguro: um `.env.prod` existente
 mantém os segredos e só tem o domínio atualizado. As seções abaixo descrevem o processo manual equivalente.
 
 ## 1. Preparar a VPS
@@ -98,24 +100,22 @@ A API aplica as migrations (`prisma migrate deploy`) ao iniciar. Atualizar: `git
 
 ### 3.1 Primeiro acesso (sem o seed)
 
-**Não rode o seed de desenvolvimento** em produção (ele cria usuários com senhas conhecidas). Crie o super admin
-direto no container da API (troque e-mail e senha):
+**Não rode o seed de desenvolvimento** em produção (ele cria usuários com senhas conhecidas). Use o mesmo
+script do instalador, que é idempotente e não sobrescreve nada que já exista:
 
 ```bash
-docker compose -f docker-compose.prod.yml --env-file .env.prod exec api node -e "
-const { PrismaClient } = require('@prisma/client'); const bcrypt = require('bcryptjs');
-const p = new PrismaClient();
-(async () => {
-  await p.usuarioPlataforma.create({ data: { nome: 'Administrador', email: process.argv[1], senha_hash: await bcrypt.hash(process.argv[2], 10) } });
-  console.log('super admin criado'); await p.\$disconnect();
-})();" voce@seudominio.com.br 'UMA-SENHA-FORTE'
+./deploy/acessos.sh               # recursos, planos, super admin e "Minha Clínica" — senhas em ACESSOS.txt
+./deploy/acessos.sh --redefinir   # senhas novas para o super admin e o admin da clínica
 ```
+
+Ele roda `deploy/inicializar-producao.cjs` dentro do container da API (catálogo de recursos e limites espelham
+`src/plugins/recursos.ts` e `prisma/seed.ts` — mantenha em sincronia).
 
 Depois, em `https://DOMINIO/admin/login`:
 
-1. **Planos**: crie o plano de teste grátis (ex.: limites 1/1/1/1, WhatsApp, 3 mensagens, período total, recursos
-   da fase 2 ligados) e **marque-o como plano de cadastro** — sem isso o auto-cadastro (`/cadastro`) falha. Crie
-   os planos pagos (planos novos nascem com os recursos da fase 2 desligados: ligue os que fizerem parte do plano).
+1. **Planos**: "Teste grátis" (plano de cadastro) e "Profissional" já existem; ajuste-os ou crie outros planos pagos
+   (planos novos nascem com os recursos da fase 2 desligados: ligue os que fizerem parte do plano). Sem um plano
+   ativo marcado como plano de cadastro, o auto-cadastro (`/cadastro`) falha.
 2. **Cobrança** (se for cobrar pelo sistema): configure o gateway (ver §4) e ative-o.
 
 ## 4. Webhooks
