@@ -188,7 +188,7 @@ tentar() {
   done
   erro "não foi possível concluir: $*"
 }
-tentar compose pull --ignore-buildable --quiet
+tentar compose pull --quiet postgres redis wppconnect
 tentar compose build --pull api caddy
 tentar compose up -d
 
