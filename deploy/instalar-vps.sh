@@ -23,6 +23,10 @@
 # EMAIL_ACME (padrão admin@DOMINIO).
 set -euo pipefail
 
+# Tudo dentro de main(): com "curl ... | bash" o bash lê o script pelo stdin enquanto executa, e qualquer comando
+# que leia o stdin (ex.: docker compose exec) engoliria o resto do script. Assim o arquivo é lido inteiro antes.
+main() {
+
 REPO_URL="${REPO_URL:-https://github.com/clfigueiredo/sistemaclinicaaula.git}"
 BRANCH="${BRANCH:-main}"
 DIR_INSTALACAO="${DIR_INSTALACAO:-/opt/sistema-clinica}"
@@ -135,7 +139,7 @@ compose up -d
 
 info "Aguardando a API responder..."
 for _ in $(seq 1 60); do
-  if compose exec -T api node -e "fetch('http://127.0.0.1:3333/saude').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
+  if compose exec -T api node -e "fetch('http://127.0.0.1:3333/saude').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" </dev/null >/dev/null 2>&1; then
     API_OK=1; break
   fi
   sleep 5
@@ -152,7 +156,7 @@ systemctl enable --now cron >/dev/null 2>&1 || true
 # Recursos, planos (com o de cadastro), super admin e "Minha Clínica" — senhas aleatórias, salvas em ACESSOS.txt.
 chmod +x deploy/acessos.sh
 info "Preparando o banco e os acessos..."
-./deploy/acessos.sh
+./deploy/acessos.sh </dev/null
 
 # --- Resumo -------------------------------------------------------------------------------------------------
 echo
@@ -163,3 +167,6 @@ echo "  Backup:       diário às 03:15 em /var/backups/sistema-clinica"
 echo "  Acessos:      $DIR_INSTALACAO/ACESSOS.txt  (ver de novo: cat $DIR_INSTALACAO/ACESSOS.txt)"
 echo
 echo "Os acessos dos dois painéis estão no quadro acima. Se o HTTPS ainda não abrir, aguarde o DNS propagar."
+}
+
+main "$@"
