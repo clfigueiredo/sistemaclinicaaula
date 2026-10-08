@@ -324,11 +324,16 @@ model Plano {
   ativo          Boolean  @default(true)
   /// Plano atribuído no auto-cadastro. Só um pode estar marcado (índice parcial único na migration).
   plano_cadastro Boolean  @default(false)
+  /// Aparece em "Planos" no painel da clínica para contratação com pagamento online (só planos pagos).
+  contratavel    Boolean  @default(false)
+  /// Aparece na landing page (GET /publico/planos).
+  exibir_landing Boolean  @default(false)
   criado_em      DateTime @default(now())
   atualizado_em  DateTime @updatedAt
 
-  recursos    PlanoRecurso[]
-  assinaturas Assinatura[]
+  recursos              PlanoRecurso[]
+  assinaturas           Assinatura[]
+  cobrancas_contratacao Cobranca[]
 
   @@map("planos")
 }
@@ -463,29 +468,32 @@ model GatewayPagamento {
 /// Cobrança (fatura) do SaaS para uma clínica (plataforma: tem clinica_id, mas NÃO é modelo de clínica.
 /// Via request.db é somente leitura e filtrada pela clínica do token — ver tenant.ts).
 model Cobranca {
-  id             String            @id @default(uuid()) @db.Uuid
-  clinica_id     String            @db.Uuid
-  assinatura_id  String?           @db.Uuid
-  gateway        ProvedorPagamento
+  id                  String            @id @default(uuid()) @db.Uuid
+  clinica_id          String            @db.Uuid
+  assinatura_id       String?           @db.Uuid
+  gateway             ProvedorPagamento
   /// ID da cobrança no gateway (payment id / invoice id).
-  id_externo     String?
-  descricao      String?
-  valor          Decimal           @db.Decimal(10, 2)
-  vencimento     DateTime          @db.Date
-  status         StatusCobranca    @default(pendente)
-  metodo         MetodoCobranca?
-  link_pagamento String?
-  pago_em        DateTime?
+  id_externo          String?
+  descricao           String?
+  valor               Decimal           @db.Decimal(10, 2)
+  vencimento          DateTime          @db.Date
+  status              StatusCobranca    @default(pendente)
+  metodo              MetodoCobranca?
+  link_pagamento      String?
+  pago_em             DateTime?
+  /// Contratação pela própria clínica (POST /contratacao): plano liberado quando esta cobrança for paga.
+  plano_contratado_id String?           @db.Uuid
   /// Ambiente do gateway quando a cobrança foi gerada (null = anterior à migration `seguranca_fase2`, preenchido
   /// com o ambiente do gateway naquele momento). Pagamento de cobrança sandbox com gateway em produção é ignorado.
-  ambiente       AmbienteGateway?
+  ambiente            AmbienteGateway?
   /// Último payload relevante do gateway (auditoria).
-  payload        Json?
-  criado_em      DateTime          @default(now())
-  atualizado_em  DateTime          @updatedAt
+  payload             Json?
+  criado_em           DateTime          @default(now())
+  atualizado_em       DateTime          @updatedAt
 
-  clinica    Clinica     @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
-  assinatura Assinatura? @relation(fields: [assinatura_id], references: [id], onDelete: SetNull)
+  clinica          Clinica     @relation(fields: [clinica_id], references: [id], onDelete: Cascade)
+  assinatura       Assinatura? @relation(fields: [assinatura_id], references: [id], onDelete: SetNull)
+  plano_contratado Plano?      @relation(fields: [plano_contratado_id], references: [id], onDelete: SetNull)
 
   @@unique([gateway, id_externo])
   @@index([clinica_id, vencimento])

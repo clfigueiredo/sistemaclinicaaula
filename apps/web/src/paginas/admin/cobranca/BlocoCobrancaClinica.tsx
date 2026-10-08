@@ -121,7 +121,7 @@ export default function BlocoCobrancaClinica({ clinicaId }: { clinicaId: string 
             )}
             <div className="border-t px-6 py-3 text-right">
               <Button variant="link" size="sm" asChild className="h-auto p-0">
-                <Link to={`/admin/cobranca?clinica=${clinicaId}`}>Ver todas as cobranças</Link>
+                <Link to={`/admin/cobrancas?clinica=${clinicaId}`}>Ver todas as cobranças</Link>
               </Button>
             </div>
           </>

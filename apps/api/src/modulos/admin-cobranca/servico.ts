@@ -26,6 +26,9 @@
  *     `estornada` conta como dívida (igual a pendente/vencida) na tolerância até o super admin cancelá-la
  *     (perdão) — cancelar uma estornada é só local.
  *   - Cancelamento/vencimento vindos do gateway só mudam o status da cobrança.
+ *   - Contratação pela clínica (módulo contratacao): cobrança com `plano_contratado_id`. Só quando ela é PAGA o
+ *     plano da assinatura é trocado (`inicio` = agora) e a cobrança automática liga (dia de vencimento = dia da
+ *     cobrança, máx. 28). Em aberto, ela NÃO conta como dívida (não liberou nada); estornada conta, como as outras.
  *   - Sem gateway ativo: nada é gerado (o worker só registra no log); nada quebra.
  */
 import { Prisma, type Cobranca, type MetodoCobranca, type ProvedorPagamento, type StatusCobranca } from '@prisma/client';
@@ -117,6 +120,7 @@ export function serializarCobranca(c: Omit<Cobranca, 'payload'> & { payload?: un
     valor: c.valor.toFixed(2),
     vencimento: paraDataIso(c.vencimento),
     status: c.status,
+    plano_contratado_id: c.plano_contratado_id,
     ambiente: c.ambiente,
     metodo: c.metodo,
     link_pagamento: c.link_pagamento,
@@ -205,6 +209,8 @@ export type DadosNovaCobranca = {
   valor?: number;
   descricao?: string;
   metodo?: MetodoCobranca;
+  /** Contratação pela clínica: plano liberado quando a cobrança for paga (valor/descrição do plano novo). */
+  planoContratado?: { id: string; nome: string; preco: number };
 };
 
 /**
@@ -217,7 +223,8 @@ export async function gerarCobranca(dados: DadosNovaCobranca, hoje = hojeIso()) 
   const { assinatura } = ctx;
 
   if (dados.vencimento < hoje) throw new ErroNegocio(400, 'vencimento_passado', 'O vencimento não pode ser anterior a hoje.');
-  const valor = Math.round((dados.valor ?? assinatura.plano.preco.toNumber()) * 100) / 100;
+  const plano = dados.planoContratado ?? { nome: assinatura.plano.nome, preco: assinatura.plano.preco.toNumber() };
+  const valor = Math.round((dados.valor ?? plano.preco) * 100) / 100;
   if (!(valor > 0)) {
     throw new ErroNegocio(400, 'valor_invalido', 'Informe um valor maior que zero (o plano da clínica é gratuito).');
   }
@@ -225,7 +232,7 @@ export async function gerarCobranca(dados: DadosNovaCobranca, hoje = hojeIso()) 
     throw new ErroNegocio(400, 'metodo_nao_permitido', 'Este método de pagamento não está habilitado no gateway ativo.');
   }
   const descricao =
-    dados.descricao?.trim() || montarDescricao(config.opcoes.descricao_cobranca, assinatura.plano.nome, dados.vencimento);
+    dados.descricao?.trim() || montarDescricao(config.opcoes.descricao_cobranca, plano.nome, dados.vencimento);
   // Método: o informado; senão o preferido da assinatura (se ainda habilitado no gateway); senão o cliente escolhe.
   const metodo =
     dados.metodo ??
@@ -244,6 +251,7 @@ export async function gerarCobranca(dados: DadosNovaCobranca, hoje = hojeIso()) 
       metodo: metodo ?? null,
       status: 'pendente',
       ambiente: config.ambiente,
+      plano_contratado_id: dados.planoContratado?.id ?? null,
     },
   });
 
@@ -357,6 +365,38 @@ export async function cancelarCobranca(id: string) {
   return serializarCobranca(atualizada);
 }
 
+/**
+ * Baixa manual pelo super admin (pagamento recebido fora do gateway: transferência, dinheiro…). Aplica as MESMAS
+ * regras do webhook de pagamento (assinatura ativa, expira_em, contratação libera o plano) e depois cancela a
+ * cobrança no gateway (melhor esforço) para o cliente não pagar duas vezes — o webhook de cancelamento que vier
+ * depois é ignorado porque a cobrança já está paga.
+ */
+export async function registrarPagamentoManual(id: string, dados: { pagoEm?: Date; adminId?: string } = {}) {
+  const c = ou404(await prisma.cobranca.findUnique({ where: { id } }), 'Cobrança não encontrada.');
+  if (!STATUS_EM_ABERTO.includes(c.status)) {
+    throw new ErroNegocio(409, 'cobranca_nao_pagavel', 'Só é possível dar baixa manual em cobranças pendentes ou vencidas.');
+  }
+  const aviso = await aplicarEvento(c.gateway, {
+    idEvento: `manual:${c.id}`,
+    tipo: 'BAIXA_MANUAL',
+    acao: 'cobranca_paga',
+    referencia: c.id,
+    pagoEm: dados.pagoEm ?? new Date(),
+    bruto: { baixa_manual: true, admin: dados.adminId ?? null, em: new Date().toISOString() },
+  });
+  let avisoGateway: string | null = null;
+  if (c.id_externo) {
+    try {
+      const gw = await obterGateway(c.gateway);
+      if (gw) await gw.cancelar({ tipo: 'cobranca', idExterno: c.id_externo });
+    } catch (e) {
+      avisoGateway = `A baixa foi registrada, mas não foi possível cancelar a cobrança no ${NOMES_GATEWAY[c.gateway]} (${(e as Error).message}). Cancele-a manualmente no painel do gateway.`;
+    }
+  }
+  const atualizada = await prisma.cobranca.findUniqueOrThrow({ where: { id } });
+  return { cobranca: serializarCobranca(atualizada), aviso: [aviso, avisoGateway].filter(Boolean).join(' ') || null };
+}
+
 // ----------------------------------------------------------------------------- dívida (tolerância)
 
 type ClienteCobranca = Pick<Prisma.TransactionClient, 'cobranca' | 'gatewayPagamento'>;
@@ -368,7 +408,7 @@ async function mapaTolerancias(cliente: ClienteCobranca): Promise<Map<ProvedorPa
 
 /**
  * Clínicas (dentre `clinicaIds`, ou todas) com cobrança em DÍVIDA (pendente/vencida/estornada) cujo vencimento +
- * tolerância do gateway já passou em `hoje`. `exceto`: id de cobrança a desconsiderar (a que está sendo paga).
+ * tolerância do gateway já passou em `hoje` — exceto contratação de plano em aberto. `exceto`: id de cobrança a desconsiderar (a que está sendo paga).
  */
 export async function clinicasComDividaAlemDaTolerancia(
   cliente: ClienteCobranca,
@@ -381,6 +421,8 @@ export async function clinicasComDividaAlemDaTolerancia(
       vencimento: { lt: dataSemHora(opcoes.hoje) },
       ...(opcoes.clinicaIds && { clinica_id: { in: opcoes.clinicaIds } }),
       ...(opcoes.exceto && { id: { not: opcoes.exceto } }),
+      // Contratação ainda não paga não liberou nada: não é dívida.
+      NOT: { plano_contratado_id: { not: null }, status: { in: STATUS_EM_ABERTO } },
       ...opcoes.where,
     },
     select: { clinica_id: true, gateway: true, vencimento: true },
@@ -506,7 +548,8 @@ async function aplicarEvento(provedor: ProvedorPagamento, evento: EventoPagament
         if (cobranca.ambiente === 'sandbox' && gw?.ambiente === 'producao') {
           return 'Pagamento de uma cobrança gerada em SANDBOX recebido com o gateway em produção: ignorado (nada foi alterado).';
         }
-        if (cobranca.status !== 'paga') {
+        const primeiraConfirmacao = cobranca.status !== 'paga';
+        if (primeiraConfirmacao) {
           await tx.cobranca.update({
             where: { id: cobranca.id },
             data: { status: 'paga', pago_em: evento.pagoEm ?? new Date(), payload },
@@ -516,11 +559,26 @@ async function aplicarEvento(provedor: ProvedorPagamento, evento: EventoPagament
           ? await tx.assinatura.findUnique({ where: { id: cobranca.assinatura_id } })
           : await tx.assinatura.findUnique({ where: { clinica_id: cobranca.clinica_id } });
         if (!assinatura) return null;
+        const manualAntes = assinatura.status === 'cancelada' || assinatura.status === 'bloqueada';
+        // Contratação pela clínica: o pagamento libera o plano escolhido e liga a cobrança mensal.
+        if (primeiraConfirmacao && cobranca.plano_contratado_id && !manualAntes) {
+          const trocar = assinatura.plano_id !== cobranca.plano_contratado_id;
+          await tx.assinatura.update({
+            where: { id: assinatura.id },
+            data: {
+              ...(trocar && { plano_id: cobranca.plano_contratado_id, inicio: new Date() }),
+              gateway: provedor,
+              ...(assinatura.dia_vencimento == null && {
+                dia_vencimento: Math.min(28, Number(paraDataIso(cobranca.vencimento).slice(8, 10))),
+              }),
+            },
+          });
+        }
         const tolerancia = gw?.dias_tolerancia ?? TOLERANCIA_PADRAO_DIAS;
         const fimCiclo = fimDoCicloPago(cobranca.vencimento, tolerancia);
         // Nunca recua e nunca grava no passado (pagamento de ciclo antigo não mexe na expiração).
         const avancar = fimCiclo.getTime() > Date.now() && (!assinatura.expira_em || assinatura.expira_em < fimCiclo);
-        const manual = assinatura.status === 'cancelada' || assinatura.status === 'bloqueada';
+        const manual = manualAntes;
         const outraDivida =
           !manual &&
           (await clinicasComDividaAlemDaTolerancia(tx, { hoje: hojeIso(), clinicaIds: [cobranca.clinica_id], exceto: cobranca.id }))

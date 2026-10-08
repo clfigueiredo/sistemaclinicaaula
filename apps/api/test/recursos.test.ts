@@ -140,7 +140,7 @@ describe('preHandlers HTTP', () => {
     await app.close();
   });
 
-  it('assinatura vencida/bloqueada deixa a clínica somente leitura', async () => {
+  it('assinatura vencida/bloqueada suspende o acesso (só /me e as faturas continuam)', async () => {
     const app = await montarApp();
     await prisma.assinatura.update({ where: { clinica_id: cen.a.clinica.id }, data: { status: 'bloqueada' } });
     const token = assinarTokenClinica(app, { usuarioId: cen.a.admin.id, clinicaId: cen.a.clinica.id, papel: 'admin' });
@@ -148,9 +148,14 @@ describe('preHandlers HTTP', () => {
     const post = await app.inject({ method: 'POST', url: '/teste/profissionais', headers });
     expect(post.statusCode).toBe(403);
     expect(post.json().erro).toBe('assinatura_inativa');
+    // Leitura também é bloqueada (bloqueio total).
+    const leitura = await app.inject({ method: 'GET', url: '/pacientes', headers });
+    expect(leitura.statusCode).toBe(403);
+    expect(leitura.json().erro).toBe('assinatura_inativa');
     const get = await app.inject({ method: 'GET', url: '/me', headers });
     expect(get.statusCode).toBe(200);
     expect(get.json().assinatura.somente_leitura).toBe(true);
+    expect((await app.inject({ method: 'GET', url: '/cobrancas/minhas', headers })).statusCode).toBe(200);
 
     // teste com expira_em no passado também vira somente leitura
     await prisma.assinatura.update({

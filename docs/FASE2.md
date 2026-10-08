@@ -359,7 +359,7 @@ manualmente — o evento registra um aviso) e **`expira_em` avança** para o fim
 `vencida`; gera a cobrança do próximo ciclo (até 10 dias antes, no máximo uma por mês — uma cobrança cancelada
 significa "não cobrar este mês") no método `assinaturas.metodo_cobranca` e com a descrição
 `gateways_pagamento.descricao_cobranca`; cobrança em aberto há **mais** de `dias_tolerancia` dias ⇒ assinatura
-`ativa` → **`vencida`** (somente leitura via `statusEfetivo`/`ehSomenteLeitura`; volta a `ativa` com o
+`ativa` → **`vencida`** (acesso suspenso via `statusEfetivo`/`ehSomenteLeitura`; volta a `ativa` com o
 pagamento). `bloqueada` fica reservado ao bloqueio manual do super admin. Recorrência: o **nosso** worker gera uma
 cobrança avulsa por ciclo nos três gateways (não usamos a assinatura nativa de cada um). Sem gateway ativo nada é
 gerado e nada quebra.
@@ -428,7 +428,9 @@ ou `{ data? }` (`JobCobrancas`); `data` (`YYYY-MM-DD`) simula o dia em testes/re
 | `/lista-espera` | admin, recepção · `lista_espera` | `paginas/clinica/lista-espera/ListaEspera.tsx` (lista-espera) |
 | `/retornos` | todos · `retorno_automatico` | `paginas/clinica/retornos/Retornos.tsx` (retornos) |
 | `/financeiro` (+ `caixa`, `contas-pagar`, `contas-receber`, `recorrencias`, `repasses`, `relatorios`, `configuracoes`) | ver `PAPEIS_ROTA.financeiro*` · `financeiro` | `paginas/clinica/financeiro/*` (financeiro) — `LayoutFinanceiro` + `ABAS_FINANCEIRO` |
-| `/admin/cobranca` | super admin | `paginas/admin/cobranca/Cobranca.tsx` (admin-cobranca) |
+| `/admin/cobranca` | super admin | `paginas/admin/cobranca/Cobranca.tsx` — Gateways + Eventos (admin-cobranca) |
+| `/admin/cobrancas` | super admin | `paginas/admin/cobranca/PaginaCobrancas.tsx` — lista de cobranças (§13) |
+| `/planos` | admin da clínica | `paginas/clinica/planos/Planos.tsx` — contratação de plano (§13) |
 | `/agendar/:slug` | **público** | `paginas/publico/agendar/AgendamentoOnline.tsx` (agendamento-online) |
 
 Menus: `MENU_CLINICA`/`MENU_ADMIN` em `rotas/navegacao.ts` (item com `recurso` só aparece se habilitado).
@@ -481,3 +483,64 @@ Testes de regressão nos arquivos de cada módulo (`test/agendamento-online.test
 | Recepção × repasses | `GET /financeiro/movimentacoes`: recepção com `origem=repasse` ou `profissional_id` ⇒ 403; a lista da recepção exclui repasses e estornos de repasse (totais também). `POST /financeiro/movimentacoes` com `profissional_id` pela recepção ⇒ 403 (o profissional vem do agendamento: `agendamento_id` ou `/recebimentos`). No Caixa, os campos de profissional só aparecem para o admin. |
 | GET com assinatura inativa | `GET /financeiro/contas`/`categorias` não criam a conta "Caixa" nem as categorias padrão em somente leitura (lista vazia se nada existir). |
 | Marcador `[agendamento:<id>]` | Conferido: nenhum código lê o marcador de `observacoes` (só a migração de dados de `ajustes_fase2`, que exige a mesma clínica). |
+
+## 13. Contratação de plano, planos na landing e bloqueio total (migration `20261008000000_contratacao_planos`)
+
+Decisões do usuário (08/10/2026): a clínica contrata sozinha; o plano só muda **depois** do pagamento; só clínica
+em plano gratuito contrata (troca entre planos pagos continua com o super admin); assinatura inativa ⇒ **bloqueio
+total** (não mais somente leitura); gestão de cobranças em item próprio do menu do super admin.
+
+**Modelo:** `planos.contratavel` (aparece em `/planos` da clínica — só plano pago; a API recusa plano gratuito
+contratável com 409 `plano_gratuito_contratavel`, inclusive ao zerar o preço), `planos.exibir_landing` (aparece na
+landing) e `cobrancas.plano_contratado_id` (FK `planos`, `ON DELETE SET NULL`).
+
+**Módulo `contratacao`** (`modulos/contratacao/index.ts`, prisma cru — dados de plataforma; clínica sempre do token):
+
+| Rota | Quem | Corpo | Resposta / regras |
+|---|---|---|---|
+| `GET /publico/planos` | público (rate limit 60/min) | — | planos ativos com `exibir_landing`, preço crescente: `{ id, nome, descricao, preco, gratuito, plano_cadastro, recursos: [só os inclusos: { codigo, nome, tipo, limite, periodo }] }`; `Cache-Control: max-age=60` |
+| `GET /contratacao` | admin | — | `{ plano_atual, status_assinatura, pode_contratar, motivo (plano_pago \| assinatura_inativa \| pagamento_indisponivel), mensagem, planos (ativos + contratavel + preço > 0), pendente (cobrança de contratação pendente + plano_nome) }` |
+| `POST /contratacao` | admin (rate limit 10/min) | `{ plano_id }` | gera cobrança no gateway ativo (vencimento hoje, valor/descrição do plano escolhido) ⇒ 201 `{ cobranca, link_pagamento }`; mesma escolha com pendente ⇒ 200 a mesma; outra escolha ⇒ cancela a anterior (gateway + local) e gera nova. 409 `plano_indisponivel` / os `motivo`s acima. Advisory lock por clínica na transação |
+
+- **Pagamento confirmado** (`aplicarEvento`, `cobranca_paga` — webhook ou baixa manual): na 1ª confirmação de uma
+  cobrança com `plano_contratado_id` (e assinatura não cancelada/bloqueada) troca `plano_id` (+ `inicio`), grava
+  `gateway` e, se vazio, `dia_vencimento` = dia do vencimento da cobrança (máx. 28) ⇒ a cobrança mensal automática
+  liga; o resto é igual ao pagamento normal (`ativa`, `expira_em` = vencimento + 1 mês + tolerância).
+- Contratação **em aberto** (`pendente`/`vencida`) **não** é dívida em `clinicasComDividaAlemDaTolerancia`;
+  `estornada` continua contando.
+- Landing: seção "Planos" preenchida por JS (`fetch('/api/publico/planos')`; escondida se vazia). O Caddy do
+  `DOMINIO_SITE` faz proxy **só** de `/api/publico/planos`. Botão do plano pago ⇒ `DOMINIO_APP/cadastro?plano=<id>`;
+  depois do cadastro (`destinoAposCadastro`, `componentes/layout/Guardas.tsx`) ⇒ `/planos?plano=<id>` (destacado).
+- Front da clínica: rodapé do menu ("Fazer upgrade" no plano gratuito / "Ver planos") e Configurações levam a
+  `/planos`; diálogo de confirmação ⇒ `window.location.assign(link)` (fatura do gateway); com pendente a página
+  consulta a API a cada 10 s e avisa "Pagamento confirmado" (invalida `/me` e as faturas).
+
+**Bloqueio total** (`plugins/auth.ts`, `ROTAS_COM_ACESSO_SUSPENSO`): com `ehSomenteLeitura(statusEfetivo)` (vencida,
+cancelada, bloqueada, ou expira_em passado) toda rota da clínica responde 403 `assinatura_inativa` (mensagem de
+"acesso suspenso"), **menos** `GET /me` e `GET /cobrancas/minhas`. O `LayoutClinica` renderiza só
+`componentes/layout/AcessoSuspenso.tsx`: admin vê `MinhasFaturas` (Pagar) e "Já paguei, verificar"; demais papéis,
+"procure o administrador"; polling do `/me` a cada 15 s libera sozinho. O campo `somente_leitura` do `/me` foi mantido
+(agora significa acesso suspenso). Agendamento online público e WhatsApp já paravam com assinatura inativa.
+
+**Cobranças do super admin** (`/admin/cobrancas`; `/admin/cobranca?aba=cobrancas` redireciona):
+`GET /admin/cobranca/cobrancas` ganhou `situacao` e `busca` (nome da clínica):
+
+| `situacao` | Filtro |
+|---|---|
+| `a_vencer` | `pendente` com vencimento entre hoje e hoje + 7 (ordem crescente) |
+| `em_atraso` | `pendente`/`vencida`, vencimento < hoje, não é contratação, clínica **ainda com acesso** |
+| `inadimplente` | em dívida (pendente/vencida não-contratação, ou estornada), vencida, clínica **já suspensa** |
+| `paga` / `cancelada` | `paga` / `cancelada` + `estornada` |
+
+Cada item traz `contratacao`, `plano_contratado_nome`, `bloqueia_em` (vencimento + tolerância + 1 — dia em que o job
+suspende; null se paga/cancelada/contratação) e `acesso` `{ status (efetivo), plano }`; `totais` ganhou `a_vencer`
+(+ `quantidade.a_vencer`). **Baixa manual:** `POST /admin/cobranca/cobrancas/:id/pagar-manual` `{ pago_em? }`
+(só pendente/vencida; 409 `cobranca_nao_pagavel`) ⇒ `registrarPagamentoManual` (servico.ts): aplica `cobranca_paga`
+como o webhook e **depois** cancela no gateway (melhor esforço; falha vira `aviso`) — o webhook de cancelamento que
+chega em seguida é ignorado porque a cobrança já está paga. Menu do super admin: **Cobranças** (`/admin/cobrancas`)
+e **Gateways** (`/admin/cobranca`).
+
+Testes: `apps/api/test/contratacao.test.ts` (landing, opções do plano, contratação, webhook que libera o plano,
+contratação abandonada não vence a assinatura); `recursos.test.ts` e `financeiro.test.ts` ajustados ao bloqueio total.
+Asaas sandbox: Pix só aparece com chave Pix cadastrada na conta sandbox; cartão de teste aprovado
+`4444 4444 4444 4444` / CVV `123`; valor mínimo de cobrança com "pergunte ao cliente" (vários métodos) é R$ 5,00.

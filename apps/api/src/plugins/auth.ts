@@ -12,8 +12,8 @@
  *   autenticarClinica   → exige token de clínica; recarrega o usuário do banco (ativo, papel atual),
  *                         recusa tokens emitidos antes da última troca de senha (senha_alterada_em),
  *                         preenche request.usuarioClinica, request.clinicaId, request.db (tenant)
- *                         e request.assinatura; bloqueia métodos não-GET se a assinatura estiver
- *                         vencida/cancelada/bloqueada (somente leitura).
+ *                         e request.assinatura; com a assinatura vencida/cancelada/bloqueada o acesso fica
+ *                         SUSPENSO (403 assinatura_inativa em tudo, menos GET /me e GET /cobrancas/minhas).
  *   exigirPapel(...p)   → autentica a clínica (se ainda não autenticada) e exige um dos papéis.
  *
  * Exemplo em um módulo:
@@ -74,7 +74,11 @@ declare module 'fastify' {
   }
 }
 
-const METODOS_LEITURA = new Set(['GET', 'HEAD', 'OPTIONS']);
+/**
+ * Rotas que continuam liberadas com a assinatura vencida/cancelada/bloqueada (acesso suspenso): a sessão, para o
+ * front mostrar a tela de bloqueio, e as faturas, para o admin pagar. Todo o resto recebe 403 `assinatura_inativa`.
+ */
+const ROTAS_COM_ACESSO_SUSPENSO: ReadonlySet<string> = new Set(['GET /me', 'GET /cobrancas/minhas']);
 
 async function verificarToken(request: FastifyRequest): Promise<TokenPayload> {
   try {
@@ -110,11 +114,14 @@ export async function autenticarClinica(request: FastifyRequest, _reply?: Fastif
 
   const status = usuario.clinica.assinatura ? statusEfetivo(usuario.clinica.assinatura) : null;
   const somenteLeitura = ehSomenteLeitura(status);
-  if (somenteLeitura && !METODOS_LEITURA.has(request.method)) {
+  // Assinatura vencida/cancelada/bloqueada ⇒ acesso SUSPENSO: só a sessão (/me) e as faturas para pagar.
+  if (somenteLeitura && !ROTAS_COM_ACESSO_SUSPENSO.has(`${request.method} ${request.routeOptions.url}`)) {
     throw new ErroNegocio(
       403,
       'assinatura_inativa',
-      'Sua assinatura está vencida, cancelada ou bloqueada: o sistema está em modo somente leitura. Regularize o plano para voltar a editar.',
+      status === 'vencida'
+        ? 'Acesso suspenso por falta de pagamento. Pague a fatura em aberto para liberar o sistema.'
+        : 'Acesso suspenso: a assinatura da clínica está cancelada ou bloqueada. Fale com o suporte.',
       { status },
     );
   }

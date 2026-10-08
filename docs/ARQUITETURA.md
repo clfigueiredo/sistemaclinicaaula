@@ -100,8 +100,9 @@ O teste grátis **não tem prazo de expiração**; 3 mensagens cabem um lembrete
   `limite_atingido` / `recurso_indisponivel` com mensagem de upgrade.
 - Frontend: endpoint `/me` devolve recursos e uso atual; menus, rotas e botões se adaptam (`usePodeUsar`).
 - Assinatura com status `teste | ativa | vencida | cancelada | bloqueada`. `teste`/`ativa` com `expira_em` no
-  passado = `vencida` (`statusEfetivo`). Vencida/cancelada/bloqueada → acesso **somente leitura** (HTTP: métodos
-  não-GET ⇒ 403 `assinatura_inativa`) e **nada de WhatsApp**: o job de lembretes pula a clínica, o
+  passado = `vencida` (`statusEfetivo`). Vencida/cancelada/bloqueada → **acesso suspenso** (HTTP: 403
+  `assinatura_inativa` em tudo, menos `GET /me` e `GET /cobrancas/minhas`; o front mostra só a tela de pagamento)
+  e **nada de WhatsApp**: o job de lembretes pula a clínica, o
   enfileiramento e o worker marcam a mensagem como `falhou/assinatura_inativa` e a resposta do paciente é
   gravada, mas não altera o agendamento nem é respondida (`assegurarAssinaturaAtiva` em `plugins/recursos.ts`).
   Os jobs da fase 2 e o agendamento online público também exigem assinatura ativa.
@@ -149,7 +150,7 @@ Fonte da verdade: `apps/api/prisma/schema.prisma`. Migrations (`apps/api/prisma/
 
 - `usuarios_plataforma` — super admins: nome, email (único), senha_hash, ativo
 - `recursos` — catálogo (codigo, nome, descricao, tipo `limite|booleano`, ordem), sincronizado pelo seed
-- `planos`, `plano_recursos` — ver §4.2
+- `planos`, `plano_recursos` — ver §4.2 (+ `contratavel`: a clínica contrata em `/planos`; `exibir_landing`: aparece na landing)
 - `clinicas` — nome, documento (único), responsavel, email, telefone, endereco, cidade, uf, cep,
   `fuso_horario` (padrão `America/Sao_Paulo`), `slug` (único; URL pública `/agendar/:slug`), status `ativa|inativa`
 - `assinaturas` — clinica_id (1:1), plano_id, status, inicio, expira_em; cobrança automática: `gateway`
@@ -161,7 +162,8 @@ Fonte da verdade: `apps/api/prisma/schema.prisma`. Migrations (`apps/api/prisma/
   `dia_vencimento_padrao` (1–28, padrão 10), `descricao_cobranca` (modelo com `{plano}`/`{competencia}`)
 - `cobrancas` — clinica_id, assinatura_id, gateway, id_externo (único por gateway), descricao, valor,
   vencimento (data), status `pendente|paga|vencida|cancelada|estornada`, metodo, link_pagamento, pago_em,
-  `ambiente` (`sandbox|producao`, gravado na geração), payload
+  `ambiente` (`sandbox|producao`, gravado na geração), `plano_contratado_id` (contratação pela clínica: plano
+  liberado quando paga), payload
 - `eventos_gateway` — webhooks recebidos: gateway, id_evento, tipo, payload, processado_em, erro;
   idempotência por `(gateway, id_evento)`
 
@@ -286,15 +288,19 @@ na hora.
   dia de vencimento + método). Também é possível ligar/desligar e gerar cobrança avulsa no detalhe da clínica.
 - Job diário às **07:00**: pendentes vencidas ⇒ `vencida`; gera a cobrança do próximo ciclo (até 10 dias antes,
   no máximo uma por mês — o **nosso** worker, não a assinatura nativa do gateway); dívida em aberto além de
-  `dias_tolerancia` ⇒ assinatura `ativa` → `vencida` (somente leitura).
+  `dias_tolerancia` ⇒ assinatura `ativa` → `vencida` (acesso suspenso).
 - Webhook `cobranca_paga` ⇒ cobrança `paga`, assinatura volta a `ativa` (se não restar outra dívida além da
   tolerância) e `expira_em` avança até o fim do ciclo pago + tolerância (nunca recua no pagamento). Estorno/
   chargeback de cobrança paga recalcula `expira_em` pelo último ciclo ainda pago; `estornada` conta como dívida
   até o super admin cancelá-la (perdão). Pagamento de cobrança cancelada não reativa; pagamento de cobrança
   sandbox com o gateway já em produção é ignorado. Eventos idempotentes em `eventos_gateway`.
 - A clínica vê as faturas em **Configurações → Faturas do sistema** (`GET /cobrancas/minhas`).
+- **Contratação pela clínica** (plano gratuito ⇒ plano pago marcado `contratavel`): `/planos` gera a cobrança e leva à
+  fatura do gateway; o plano só muda quando o pagamento é confirmado. Planos com `exibir_landing` aparecem na landing.
+- Assinatura inativa ⇒ **acesso suspenso** (tela de pagamento); super admin acompanha em **Cobranças**
+  (`/admin/cobrancas`: a vencer, em atraso, inadimplentes, pagas, canceladas; "bloqueia em"; baixa manual).
 
-Detalhes e decisões: `docs/FASE2.md` §7 e §12.
+Detalhes e decisões: `docs/FASE2.md` §7, §12 e §13.
 
 ## 10. Rotas de bloqueios de agenda
 
@@ -311,7 +317,8 @@ O contrato inicial previa `GET /bloqueios`; ficou assim (sem alias):
 | `me` | `/me`, `/me/onboarding`, `/me/clinica`, `/admin/me` |
 | `admin-planos` | `/admin/recursos`, `/admin/planos*` |
 | `admin-clinicas` | `/admin/dashboard`, `/admin/clinicas*` (inclui `PUT /admin/clinicas/:id/assinatura`) |
-| `admin-cobranca` | `/admin/cobranca/*`, `/cobrancas/minhas`, `POST /webhooks/pagamentos/:gateway` |
+| `admin-cobranca` | `/admin/cobranca/*` (+ `cobrancas/:id/pagar-manual`), `/cobrancas/minhas`, `POST /webhooks/pagamentos/:gateway` |
+| `contratacao` | `GET /publico/planos` (público), `GET/POST /contratacao` (admin da clínica) |
 | `profissionais` | `/profissionais*` (+ `/horarios`, `/profissionais/bloqueios*`) |
 | `convenios` | `/convenios*` |
 | `usuarios` | `/usuarios*` (+ `/usuarios/:id/senha`) |

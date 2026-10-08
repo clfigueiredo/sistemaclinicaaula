@@ -40,6 +40,8 @@ export const CorpoCriarPlano = z.object({
   preco: preco.default(0),
   ativo: z.boolean().default(true),
   plano_cadastro: z.boolean().default(false),
+  contratavel: z.boolean().default(false),
+  exibir_landing: z.boolean().default(false),
   recursos: ListaRecursos.default([]),
 });
 
@@ -50,6 +52,8 @@ export const CorpoEditarPlano = z
     preco: preco.optional(),
     ativo: z.boolean().optional(),
     plano_cadastro: z.boolean().optional(),
+    contratavel: z.boolean().optional(),
+    exibir_landing: z.boolean().optional(),
     recursos: ListaRecursos.optional(),
   })
   .refine((d) => Object.values(d).some((v) => v !== undefined), 'Nada para atualizar');

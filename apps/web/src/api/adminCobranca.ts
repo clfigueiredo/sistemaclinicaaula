@@ -77,6 +77,8 @@ export type Cobranca = {
   /** 'YYYY-MM-DD' */
   vencimento: string;
   status: StatusCobranca;
+  /** Contratação pela clínica: plano liberado quando esta cobrança for paga. */
+  plano_contratado_id: string | null;
   /** Ambiente do gateway quando foi gerada (null = cobrança antiga). */
   ambiente: AmbienteGateway | null;
   metodo: MetodoCobranca | null;
@@ -86,18 +88,35 @@ export type Cobranca = {
   atualizado_em: string;
 };
 
-export type CobrancaAdmin = Cobranca & { clinica: { id: string; nome: string; email: string | null } };
+export type CobrancaAdmin = Cobranca & {
+  clinica: { id: string; nome: string; email: string | null };
+  /** Cobrança de contratação de plano pela própria clínica. */
+  contratacao: boolean;
+  plano_contratado_nome: string | null;
+  /** 'YYYY-MM-DD' em que a clínica perde o acesso se não pagar (null = já paga/cancelada ou contratação). */
+  bloqueia_em: string | null;
+  /** Situação atual do acesso da clínica (status efetivo da assinatura). */
+  acesso: { status: StatusAssinatura; plano: string } | null;
+};
 
 export type ListaCobrancasAdmin = Paginado<CobrancaAdmin> & {
   totais: {
     recebido: string;
     pendente: string;
     vencido: string;
-    quantidade: { paga: number; pendente: number; vencida: number };
+    /** Pendentes com vencimento nos próximos 7 dias. */
+    a_vencer: string;
+    quantidade: { paga: number; pendente: number; vencida: number; a_vencer: number };
   };
 };
 
+/** Filtros rápidos da tela de cobranças. */
+export type SituacaoCobranca = 'a_vencer' | 'em_atraso' | 'inadimplente' | 'paga' | 'cancelada';
+
 export type FiltrosCobrancas = {
+  situacao?: SituacaoCobranca;
+  /** Parte do nome da clínica. */
+  busca?: string;
   status?: StatusCobranca;
   clinica_id?: string;
   de?: string;
@@ -229,6 +248,16 @@ export function useCancelarCobranca() {
   const apos = useAposAlterarCobranca();
   return useMutation({
     mutationFn: (id: string) => api.post<Cobranca>(`/admin/cobranca/cobrancas/${id}/cancelar`),
+    onSuccess: apos,
+  });
+}
+
+/** Baixa manual (pagamento recebido fora do gateway). */
+export function usePagarManual() {
+  const apos = useAposAlterarCobranca();
+  return useMutation({
+    mutationFn: ({ id, pago_em }: { id: string; pago_em?: string }) =>
+      api.post<{ cobranca: Cobranca; aviso: string | null }>(`/admin/cobranca/cobrancas/${id}/pagar-manual`, { pago_em }),
     onSuccess: apos,
   });
 }

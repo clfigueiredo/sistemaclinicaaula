@@ -1,6 +1,7 @@
 // Configurações da clínica: dados cadastrais (editáveis pelo admin) e plano/uso dos recursos.
 import { useState } from 'react';
-import { Pencil } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Pencil, Sparkles } from 'lucide-react';
 import { useMe } from '@/api/me';
 import { ROTULOS_STATUS_ASSINATURA } from '@/api/tipos';
 import { CabecalhoPagina, Carregando } from '@/componentes/comum';
@@ -115,9 +116,16 @@ export default function PaginaConfiguracoes() {
                 );
               })}
             </ul>
-            <p className="mt-4 text-xs text-muted-foreground">
-              Precisa de mais? Fale com o suporte para fazer upgrade do seu plano.
-            </p>
+            {me.papel === 'admin' && (
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-xs text-muted-foreground">Precisa de mais? Veja os planos disponíveis.</p>
+                <Button size="sm" asChild>
+                  <Link to="/planos">
+                    <Sparkles /> Ver planos
+                  </Link>
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

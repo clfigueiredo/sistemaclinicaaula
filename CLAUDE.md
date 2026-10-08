@@ -56,7 +56,7 @@ Sistema_Clinica/
 ├── docs/ (ARQUITETURA.md, SETUP_LOCAL.md, DEPLOY.md, FASE2.md)
 ├── apps/api/                 # Fastify 5 + Zod 4 + Prisma 6 (ESM, TypeScript estrito, tsx watch / tsup)
 │   ├── prisma/schema.prisma  # modelo de dados completo + migrations + seed.ts
-│   ├── test/                 # vitest (banco clinica_teste) — 18 arquivos, um por módulo + tenant/recursos/segurança
+│   ├── test/                 # vitest (banco clinica_teste) — 19 arquivos, um por módulo + tenant/recursos/segurança
 │   └── src/
 │       ├── app.ts            # buildApp() — exportado para testes (app.inject)
 │       ├── server.ts         # sobe a API (+ workers se EXECUTAR_WORKERS=true)
@@ -75,6 +75,7 @@ Sistema_Clinica/
 │           # MVP: auth, me, admin-planos, admin-clinicas, profissionais, convenios, usuarios, pacientes,
 │           #      prontuario, agendamentos, whatsapp
 │           # Fase 2: financeiro, agendamento-online, lista-espera, documentos, retornos, dashboard, admin-cobranca
+│           # + contratacao (planos na landing e contratação pela clínica — docs/FASE2.md §13)
 └── apps/web/                 # React 19 + Vite + Tailwind 4 + shadcn/ui + TanStack Query + React Router 7
     ├── e2e/smoke/            # Playwright: 8 specs / 13 testes (01-* a 04-* MVP, 05-* a 08-* fase 2)
     └── src/
@@ -110,7 +111,15 @@ Sistema_Clinica/
 - **Teste grátis** (plano do seed marcado como `plano_cadastro`): todas as funções, inclusive as seis da fase 2,
   limitado a **1** profissional, 1 usuário de equipe, 1 agendamento e 1 anexo, e **3** mensagens WhatsApp
   (lembrete + confirmação/cancelamento cabem no teste); limites **totais**, **sem prazo** de expiração
-  (`expira_em = null`). A conversão acontece quando a clínica bate os limites e o super admin troca o plano.
+  (`expira_em = null`). A conversão acontece pela própria clínica (**Planos** → pagamento online) ou pelo super
+  admin trocando o plano.
+- **Contratação pela clínica** (módulo `contratacao`, página `/planos` do admin da clínica): só clínica em plano
+  **gratuito** contrata; aparecem os planos ativos com `planos.contratavel` (só pagos). Gera uma cobrança no gateway
+  ativo com `cobrancas.plano_contratado_id` (vencimento hoje) e redireciona para a fatura; o plano **só muda quando
+  o pagamento é confirmado** (webhook ⇒ troca o plano, `ativa`, `expira_em`, liga a cobrança mensal no dia da
+  cobrança, máx. 28). Contratação em aberto não conta como dívida. Troca entre planos pagos continua com o super
+  admin. `planos.exibir_landing` ⇒ o plano aparece na landing (`GET /publico/planos`, proxy só dessa rota no Caddy
+  do `DOMINIO_SITE`); `/cadastro?plano=<id>` leva para `/planos?plano=<id>` depois do cadastro.
 - Planos criados pelo super admin nascem com os recursos da fase 2 **desligados** até ele liberar.
 - **Limite de equipe** (`max_recepcionistas`, "usuários de equipe"): recepções ativas + admins ativos
   **adicionais**. Só o **admin principal** (o admin ativo mais antigo — o do auto-cadastro) não conta.
@@ -121,7 +130,9 @@ Sistema_Clinica/
   pelo próprio profissional não dá acesso antes do atendimento. Profissional **não troca o paciente** de um
   agendamento (403); ninguém troca fora de `agendado`/`confirmado` (409). Vinculado a profissional
   **inativo** ⇒ 403 `profissional_inativo` no prontuário/anexos.
-- **Assinatura inativa** (vencida/cancelada/bloqueada): HTTP somente leitura e WhatsApp parado
+- **Assinatura inativa** (vencida/cancelada/bloqueada): **acesso suspenso** (a API recusa tudo com 403
+  `assinatura_inativa`, menos `GET /me` e `GET /cobrancas/minhas`; o front mostra só a tela `AcessoSuspenso` com as
+  faturas para o admin pagar, liberando sozinho quando o webhook confirmar) e WhatsApp parado
   (`assegurarAssinaturaAtiva` em lembretes, enfileiramento, worker e webhook de respostas).
 - Planos ilimitados criados pelo super admin; cada limite tem período `total` ou `mensal`.
 - Mesmo profissional em duas clínicas = **dois cadastros independentes**.
@@ -145,7 +156,7 @@ Sistema_Clinica/
 - **Cobrança do SaaS** (super admin): **um gateway ativo** por vez (Asaas, Stripe ou Mercado Pago), credenciais
   cifradas. O **nosso worker** gera uma cobrança avulsa por mês (até 10 dias antes do vencimento; não usamos a
   assinatura nativa do gateway); atribuir plano pago com gateway ativo liga a cobrança automática. Cobrança em
-  aberto além de `dias_tolerancia` ⇒ assinatura **`vencida`** (somente leitura); o pagamento (webhook) volta a
+  aberto além de `dias_tolerancia` ⇒ assinatura **`vencida`** (acesso suspenso); o pagamento (webhook) volta a
   `ativa` e **avança `expira_em`** até o fim do ciclo pago + tolerância. **Estorno/chargeback** de cobrança paga
   recalcula `expira_em` pelo último ciclo ainda pago (sem nenhum ⇒ `vencida`) e `estornada` conta como dívida
   até o super admin **cancelá-la** (perdão). Pagar cobrança cancelada não reativa. `cobrancas.ambiente` guarda
@@ -178,7 +189,10 @@ npm run db:generate         # prisma generate (com a API PARADA — ver dicas ab
 npm run db:studio           # Prisma Studio
 ```
 
-Última execução registrada: **243 testes em 18 arquivos** (vitest) e **13 testes E2E** em 8 specs, todos passando.
+Última execução registrada da suíte inteira: **243 testes em 18 arquivos** (vitest) e **13 testes E2E** em 8 specs, todos
+passando. Em 08/10/2026 rodaram só `contratacao` (novo), `cobranca` e `admin` (43 testes, todos passando); `recursos` e
+`financeiro` foram ajustados ao bloqueio total mas não rodaram — rode a suíte inteira num ambiente de dev.
+**Na VPS de homologação não rode o vitest** sem o usuário pedir (ele cria o banco `clinica_teste` no Postgres da VPS).
 
 ### Dicas do ambiente (disco de rede SMB)
 
@@ -232,6 +246,7 @@ clínica nova em `/cadastro`. O seed é idempotente e **nunca** deve rodar em pr
 - Módulos da fase 2 do produto (implementados, contrato e adições em `docs/FASE2.md`): `financeiro`,
   `agendamento-online` (+ rotas públicas `/publico/clinicas/:slug*`), `lista-espera`, `documentos`, `retornos`,
   `dashboard`, `admin-cobranca` (+ webhooks `POST /webhooks/pagamentos/:gateway` e `GET /cobrancas/minhas`).
+- Depois da fase 2: `contratacao` (`GET /publico/planos`, `GET/POST /contratacao` — `docs/FASE2.md` §13).
 - Integrações entre módulos da fase 2 (sem hooks genéricos — chamadas diretas a serviços exportados):
   criar agendamento (`POST /agendamentos` e aprovação online) chama `vincularRetornoAoNovoAgendamento`
   (`modulos/retornos/servico.ts`); trocar para plano pago (`PUT /admin/clinicas/:id/assinatura`) chama
@@ -265,7 +280,8 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
 - `autenticarClinica` recarrega o usuário do banco (papel/ativo atuais) e preenche:
   `request.usuarioClinica` `{ id, nome, email, papel, profissionalId, clinicaId }`, `request.clinicaId`,
   `request.db`, `request.assinatura` `{ status, somenteLeitura }`. Assinatura vencida/cancelada/bloqueada
-  ⇒ métodos não-GET recebem 403 `assinatura_inativa` automaticamente. Fora do HTTP (workers/webhook) use
+  ⇒ acesso suspenso: 403 `assinatura_inativa` em toda rota da clínica, menos `ROTAS_COM_ACESSO_SUSPENSO`
+  (`GET /me`, `GET /cobrancas/minhas`). Fora do HTTP (workers/webhook) use
   `assegurarAssinaturaAtiva(clinicaId)` / `assinaturaEstaAtiva` de `plugins/recursos.ts`.
 - Tokens emitidos antes de `usuarios.senha_alterada_em` são recusados (401). `PUT /usuarios/:id/senha`:
   própria senha exige `senha_atual` (inclusive admin) e devolve `{ token }` novo; admin redefinindo a de
@@ -431,7 +447,7 @@ await request.db.$transaction(async (tx) => {
   `MinhasFaturas`) e no detalhe da clínica do super admin (`BlocoCobrancaClinica`) — mapa completo em
   `docs/FASE2.md` §10. Gráficos do dashboard e dos relatórios são SVG/CSS próprios (sem biblioteca de gráficos).
 
-## Status atual (06/10/2026)
+## Status atual (08/10/2026)
 
 **Concluído e commitado** (`git log --oneline`):
 
@@ -447,14 +463,24 @@ await request.db.$transaction(async (tx) => {
       `fase2_produto`, `ajustes_fase2` e `seguranca_fase2`; QA E2E `05-*` a `08-*`; auditoria de segurança da
       fase 2 (resumo em `docs/FASE2.md` §12).
 - [x] Teste grátis com 3 mensagens WhatsApp e atalho `iniciar-sistema.bat`.
+- [x] Contratação de plano pela clínica (`/planos`, pagamento online — migration `contratacao_planos`), planos na
+      landing page, bloqueio total com assinatura inativa e tela **Cobranças** do super admin (`/admin/cobrancas`:
+      filtros a vencer / em atraso / inadimplentes / pagas / canceladas, "bloqueia em", baixa manual); os gateways
+      ficaram em `/admin/cobranca`. Fluxo Asaas sandbox testado de ponta a ponta na VPS de homologação (08/10/2026).
 
 **Pendências reais** (nada disso exige código novo a princípio):
 
 - [ ] Teste manual do WhatsApp com **celular real** (roteiro em `docs/SETUP_LOCAL.md`).
-- [ ] Teste dos gateways em **sandbox com credenciais reais + túnel** (cloudflared) para os webhooks
-      (roteiro em `docs/SETUP_LOCAL.md`).
-- [ ] **Primeiro deploy na VPS** (`docs/DEPLOY.md`) — as imagens Docker ainda não foram construídas numa VPS;
-      criar super admin e planos de produção sem o seed.
+- [x] **Deploy na VPS de homologação** (`/opt/sistema-clinica`, `docker-compose.prod.yml` + `.env.prod`; domínios
+      `noitedeouro.com` / `sistema.` / `admin.`). Ainda **não** é produção: o usuário edita, faz deploy e testa ali.
+- [x] Asaas **sandbox** na VPS: webhook `https://sistema.noitedeouro.com/api/webhooks/pagamentos/asaas`, contratação
+      paga com cartão de teste ⇒ plano liberado pelo webhook (08/10/2026).
+- [ ] Asaas sandbox: testar **Pix** (cadastrar chave Pix na conta sandbox), **boleto**, cobrança mensal gerada pelo
+      worker (dia 8 de cada mês para a "Clinica Fórum Telecom"), vencimento ⇒ bloqueio total ⇒ pagamento ⇒ libera, e
+      **estorno**. Stripe e Mercado Pago ainda não testados com credenciais reais.
+- [ ] Rodar a suíte vitest inteira e o E2E num ambiente de dev (o E2E ainda não cobre `/planos`, `/admin/cobrancas`
+      nem a tela de acesso suspenso).
+- [ ] Antes de virar produção: trocar o gateway para **produção**, rever planos/preços e as clínicas de teste.
 
 **Ideias futuras** (não existem no código): Row Level Security no Postgres como segunda barreira; API oficial
 do WhatsApp (Meta) como alternativa ao WPPConnect (trocar só o adapter de `whatsappService`); assinatura de

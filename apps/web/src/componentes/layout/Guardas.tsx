@@ -60,6 +60,15 @@ export function RotaAdmin({ children }: { children?: ReactNode }) {
   return children ? <>{children}</> : <Outlet />;
 }
 
+/**
+ * Destino depois do auto-cadastro: onboarding; ou, vindo da landing com um plano escolhido
+ * (`/cadastro?plano=<id>`), a página de planos com ele destacado.
+ */
+export function destinoAposCadastro(search: string): string {
+  const plano = new URLSearchParams(search).get('plano');
+  return plano && /^[0-9a-f-]{36}$/i.test(plano) ? `/planos?plano=${plano}` : '/onboarding';
+}
+
 export function RotaPublica({ tipo }: { tipo: 'clinica' | 'admin' }) {
   const { tokenClinica, tokenAdmin } = useAuth();
   const location = useLocation();
@@ -68,7 +77,7 @@ export function RotaPublica({ tipo }: { tipo: 'clinica' | 'admin' }) {
   // e o login ignoraria a rota de origem `state.de`).
   const de = (location.state as { de?: string } | null)?.de;
   if (tipo === 'clinica' && tokenClinica) {
-    return <Navigate to={location.pathname === '/cadastro' ? '/onboarding' : (de ?? '/agenda')} replace />;
+    return <Navigate to={location.pathname === '/cadastro' ? destinoAposCadastro(location.search) : (de ?? '/agenda')} replace />;
   }
   if (tipo === 'admin' && tokenAdmin) return <Navigate to={de ?? '/admin'} replace />;
   return <Outlet />;

@@ -33,6 +33,8 @@ export function serializarPlano(plano: PlanoComRecursos) {
     preco: plano.preco.toString(),
     ativo: plano.ativo,
     plano_cadastro: plano.plano_cadastro,
+    contratavel: plano.contratavel,
+    exibir_landing: plano.exibir_landing,
     criado_em: plano.criado_em,
     atualizado_em: plano.atualizado_em,
     total_clinicas: plano._count?.assinaturas ?? 0,

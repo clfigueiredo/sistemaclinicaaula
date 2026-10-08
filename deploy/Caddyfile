@@ -45,10 +45,19 @@
 # No HTML, {{env "DOMINIO_APP"}} vira o domínio do painel da clínica (links de cadastro/login).
 {$DOMINIO_SITE} {
 	import comum
-	root * /srv/landing
-	templates
-	try_files {path} {path}/ /index.html
-	file_server
+
+	# Só a lista pública de planos (seção "Planos" da landing) — mesma origem, sem CORS. O resto da API não.
+	handle /api/publico/planos {
+		uri strip_prefix /api
+		reverse_proxy api:3333
+	}
+
+	handle {
+		root * /srv/landing
+		templates
+		try_files {path} {path}/ /index.html
+		file_server
+	}
 }
 
 # --- Painel da clínica --------------------------------------------------------------------------------------

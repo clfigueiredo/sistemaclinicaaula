@@ -17,12 +17,18 @@
  *                                                          em cobrança automática (não bloqueia; a UI confirma antes)
  *   POST   /admin/cobranca/gateways/:provedor/desativar
  *   POST   /admin/cobranca/gateways/:provedor/testar      chamada leve ao gateway ⇒ { ok, mensagem }
- *   GET    /admin/cobranca/cobrancas?status&clinica_id&de&ate&pagina&por_pagina   Paginado + totais
+ *   GET    /admin/cobranca/cobrancas?situacao&status&clinica_id&busca&de&ate&pagina&por_pagina   Paginado + totais
+ *                                                          situacao: a_vencer (pendente, próximos 7 dias) | em_atraso (vencida,
+ *                                                          clínica ainda com acesso — `bloqueia_em`) | inadimplente (em dívida e
+ *                                                          clínica já suspensa) | paga | cancelada (cancelada/estornada).
+ *                                                          Cada item traz `contratacao`, `bloqueia_em` e `acesso` (status efetivo)
  *   GET    /admin/cobranca/clinicas/:clinicaId            cobrança automática da clínica + últimas cobranças
  *   POST   /admin/cobranca/clinicas/:clinicaId/cobrancas  { vencimento, valor?, descricao?, metodo? } (gateway ativo) ⇒ 201
  *   POST   /admin/cobranca/clinicas/:clinicaId/assinatura { dia_vencimento, metodo?, gerar_agora? } liga a cobrança recorrente
  *                                                          (metodo ⇒ assinaturas.metodo_cobranca, usado pelo worker)
  *   DELETE /admin/cobranca/clinicas/:clinicaId/assinatura desliga a cobrança recorrente (cobranças existentes ficam)
+ *   POST   /admin/cobranca/cobrancas/:id/pagar-manual     { pago_em? } baixa manual (recebido fora do gateway) — mesmas regras do
+ *                                                          webhook; cancela no gateway depois ⇒ { cobranca, aviso }
  *   POST   /admin/cobranca/cobrancas/:id/cancelar         cancela no gateway e aqui (pendente/vencida); `estornada` ⇒ só aqui
  *                                                          (perdoa a dívida do estorno/chargeback para a tolerância)
  *   GET    /admin/cobranca/eventos?gateway&pagina&por_pagina   webhooks recebidos (diagnóstico)
@@ -58,10 +64,16 @@ import {
   cancelarCobranca,
   desativarCobrancaAutomatica,
   gerarCobranca,
+  hojeIso,
   processarWebhook,
+  registrarPagamentoManual,
   resumoAssinatura,
   serializarCobranca,
+  somarDias,
+  TOLERANCIA_PADRAO_DIAS,
 } from './servico';
+import { statusEfetivo } from '../../plugins/recursos';
+import { paraDataIso } from '../../servicos/financeiroComum';
 
 export const prefixo = '';
 
@@ -102,7 +114,16 @@ const CorpoGateway = z.object({
   descricao_cobranca: z.string().trim().min(3, 'Descrição muito curta').max(200, 'Máximo de 200 caracteres').optional(),
 });
 
+/** Dias à frente do filtro "a vencer". */
+const DIAS_A_VENCER = 7;
+
+const situacaoCobranca = z.enum(['a_vencer', 'em_atraso', 'inadimplente', 'paga', 'cancelada'], {
+  error: 'Situação inválida',
+});
+
 const ConsultaCobrancas = z.object({
+  situacao: situacaoCobranca.optional(),
+  busca: z.string().trim().max(100, 'Busca muito longa').optional(),
   status: statusCobranca.optional(),
   clinica_id: z.uuid('Clínica inválida').optional(),
   de: dataIso.optional(),
@@ -110,6 +131,45 @@ const ConsultaCobrancas = z.object({
   pagina: z.coerce.number().int().min(1, 'Página inválida').default(1),
   por_pagina: z.coerce.number().int().min(1).max(100, 'Máximo de 100 por página').default(20),
 });
+
+const CorpoPagarManual = z.object({
+  pago_em: dataIso.optional(),
+});
+
+function filtroSituacao(situacao: z.infer<typeof situacaoCobranca>, hoje: string): Prisma.CobrancaWhereInput {
+  // Acesso suspenso: vencida/cancelada/bloqueada, ou ativa/teste com expira_em no passado (= statusEfetivo).
+  const suspensa: Prisma.AssinaturaWhereInput = {
+    OR: [
+      { status: { in: ['vencida', 'cancelada', 'bloqueada'] } },
+      { status: { in: ['ativa', 'teste'] }, expira_em: { lt: new Date() } },
+    ],
+  };
+  switch (situacao) {
+    case 'a_vencer':
+      return {
+        status: 'pendente',
+        vencimento: { gte: dataSemHora(hoje), lte: dataSemHora(somarDias(hoje, DIAS_A_VENCER)) },
+      };
+    case 'em_atraso':
+      // Venceu, mas a clínica ainda tem acesso (dentro da tolerância). Contratação não paga não é dívida.
+      return {
+        status: { in: ['pendente', 'vencida'] },
+        vencimento: { lt: dataSemHora(hoje) },
+        plano_contratado_id: null,
+        clinica: { assinatura: { is: { NOT: suspensa } } },
+      };
+    case 'inadimplente':
+      return {
+        OR: [{ status: { in: ['pendente', 'vencida'] }, plano_contratado_id: null }, { status: 'estornada' }],
+        vencimento: { lt: dataSemHora(hoje) },
+        clinica: { assinatura: { is: suspensa } },
+      };
+    case 'paga':
+      return { status: 'paga' };
+    case 'cancelada':
+      return { status: { in: ['cancelada', 'estornada'] } };
+  }
+}
 
 const CorpoNovaCobranca = z.object({
   vencimento: dataIso,
@@ -329,29 +389,70 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
 
     admin.get('/admin/cobranca/cobrancas', { schema: { querystring: ConsultaCobrancas } }, async (request) => {
       const q = request.query;
+      const hoje = hojeIso();
       const base: Prisma.CobrancaWhereInput = {
         ...(q.clinica_id && { clinica_id: q.clinica_id }),
+        ...(q.busca && { clinica: { nome: { contains: q.busca, mode: 'insensitive' } } }),
         ...((q.de || q.ate) && {
           vencimento: { ...(q.de && { gte: dataSemHora(q.de) }), ...(q.ate && { lte: dataSemHora(q.ate) }) },
         }),
       };
-      const where: Prisma.CobrancaWhereInput = { ...base, ...(q.status && { status: q.status }) };
-      const [itens, total, porStatus] = await Promise.all([
+      const filtros: Prisma.CobrancaWhereInput[] = [base];
+      if (q.status) filtros.push({ status: q.status });
+      if (q.situacao) filtros.push(filtroSituacao(q.situacao, hoje));
+      const where: Prisma.CobrancaWhereInput = { AND: filtros };
+      // A vencer / em atraso: a mais urgente primeiro.
+      const crescente = q.situacao === 'a_vencer' || q.situacao === 'em_atraso';
+      const [itens, total, porStatus, aVencer, gateways] = await Promise.all([
         prisma.cobranca.findMany({
           where,
           omit: { payload: true },
-          include: { clinica: { select: { id: true, nome: true, email: true } } },
-          orderBy: [{ vencimento: 'desc' }, { criado_em: 'desc' }],
+          include: {
+            clinica: {
+              select: {
+                id: true,
+                nome: true,
+                email: true,
+                assinatura: { select: { status: true, expira_em: true, plano: { select: { nome: true } } } },
+              },
+            },
+            plano_contratado: { select: { nome: true } },
+          },
+          orderBy: [{ vencimento: crescente ? 'asc' : 'desc' }, { criado_em: 'desc' }],
           skip: (q.pagina - 1) * q.por_pagina,
           take: q.por_pagina,
         }),
         prisma.cobranca.count({ where }),
         prisma.cobranca.groupBy({ by: ['status'], where: base, _sum: { valor: true }, _count: { _all: true } }),
+        prisma.cobranca.aggregate({
+          where: { AND: [base, filtroSituacao('a_vencer', hoje)] },
+          _sum: { valor: true },
+          _count: { _all: true },
+        }),
+        prisma.gatewayPagamento.findMany({ select: { provedor: true, dias_tolerancia: true } }),
       ]);
+      const tolerancia = new Map(gateways.map((g) => [g.provedor, g.dias_tolerancia]));
       const soma = (s: string) => porStatus.find((g) => g.status === s)?._sum.valor?.toFixed(2) ?? '0.00';
       const qtd = (s: string) => porStatus.find((g) => g.status === s)?._count._all ?? 0;
       return {
-        itens: itens.map((c) => ({ ...serializarCobranca(c), clinica: c.clinica })),
+        itens: itens.map(({ clinica, plano_contratado, ...c }) => {
+          const emAberto = c.status === 'pendente' || c.status === 'vencida';
+          const contratacao = !!c.plano_contratado_id;
+          return {
+            ...serializarCobranca(c),
+            clinica: { id: clinica.id, nome: clinica.nome, email: clinica.email },
+            plano_contratado_nome: plano_contratado?.nome ?? null,
+            contratacao,
+            // Data a partir da qual a clínica perde o acesso se não pagar (contratação em aberto não bloqueia).
+            bloqueia_em:
+              emAberto && !contratacao
+                ? somarDias(paraDataIso(c.vencimento), (tolerancia.get(c.gateway) ?? TOLERANCIA_PADRAO_DIAS) + 1)
+                : null,
+            acesso: clinica.assinatura
+              ? { status: statusEfetivo(clinica.assinatura), plano: clinica.assinatura.plano.nome }
+              : null,
+          };
+        }),
         total,
         pagina: q.pagina,
         porPagina: q.por_pagina,
@@ -359,7 +460,8 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
           recebido: soma('paga'),
           pendente: soma('pendente'),
           vencido: soma('vencida'),
-          quantidade: { paga: qtd('paga'), pendente: qtd('pendente'), vencida: qtd('vencida') },
+          a_vencer: aVencer._sum.valor?.toFixed(2) ?? '0.00',
+          quantidade: { paga: qtd('paga'), pendente: qtd('pendente'), vencida: qtd('vencida'), a_vencer: aVencer._count._all },
         },
       };
     });
@@ -412,6 +514,17 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
       request.log.info({ clinicaId: request.params.clinicaId, admin: request.adminPlataforma?.id }, 'Cobrança automática desativada');
       return r;
     });
+
+    admin.post(
+      '/admin/cobranca/cobrancas/:id/pagar-manual',
+      { schema: { params: ParamsId, body: CorpoPagarManual } },
+      async (request) => {
+        const pagoEm = request.body.pago_em ? new Date(`${request.body.pago_em}T12:00:00.000Z`) : undefined;
+        const r = await registrarPagamentoManual(request.params.id, { pagoEm, adminId: request.adminPlataforma?.id });
+        request.log.info({ cobranca: request.params.id, admin: request.adminPlataforma?.id }, 'Baixa manual de cobrança');
+        return r;
+      },
+    );
 
     admin.post('/admin/cobranca/cobrancas/:id/cancelar', { schema: { params: ParamsId } }, async (request) => {
       const r = await cancelarCobranca(request.params.id);

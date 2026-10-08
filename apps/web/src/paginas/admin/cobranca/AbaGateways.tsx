@@ -433,7 +433,7 @@ function DetalheGateway({ gateway }: { gateway: GatewayConfigurado }) {
                       <FormControl>
                         <Input type="number" min={0} max={60} inputMode="numeric" {...field} />
                       </FormControl>
-                      <FormDescription>Após o vencimento, antes de a assinatura ficar vencida (somente leitura).</FormDescription>
+                      <FormDescription>Após o vencimento, antes de a assinatura ficar vencida (acesso suspenso).</FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}

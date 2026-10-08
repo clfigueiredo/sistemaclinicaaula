@@ -43,9 +43,9 @@ import BlocoCobrancaClinica from '../cobranca/BlocoCobrancaClinica';
 const DESCRICAO_STATUS: Record<StatusAssinatura, string> = {
   teste: 'Teste grátis: acesso completo dentro dos limites do plano.',
   ativa: 'Assinatura paga e em dia: acesso completo.',
-  vencida: 'Pagamento em atraso: a clínica fica em modo somente leitura.',
-  cancelada: 'Assinatura cancelada: a clínica fica em modo somente leitura.',
-  bloqueada: 'Bloqueio administrativo: a clínica fica em modo somente leitura.',
+  vencida: 'Pagamento em atraso: o acesso da clínica fica suspenso.',
+  cancelada: 'Assinatura cancelada: o acesso da clínica fica suspenso.',
+  bloqueada: 'Bloqueio administrativo: o acesso da clínica fica suspenso.',
 };
 
 const ROTULO_WHATSAPP: Record<string, string> = {
@@ -124,10 +124,10 @@ function Conteudo({ d }: { d: DetalheClinicaAdmin }) {
       {ativa && assinatura?.somente_leitura && (
         <Alert className="border-warning/40 bg-warning/10">
           <Lock className="size-4" />
-          <AlertTitle>Modo somente leitura</AlertTitle>
+          <AlertTitle>Acesso suspenso</AlertTitle>
           <AlertDescription>
             Com a assinatura {assinatura.status ? ROTULOS_STATUS_ASSINATURA[assinatura.status].toLowerCase() : 'inativa'}, a
-            clínica consegue consultar os dados, mas não criar nem alterar nada.
+            clínica só vê a tela de pagamento (o admin dela pode pagar as faturas em aberto). Pagou ⇒ libera sozinho.
           </AlertDescription>
         </Alert>
       )}
@@ -530,7 +530,7 @@ function DialogoExpiracao({ d, aberto, aoFechar }: PropsDialogo) {
         }
       }}
       titulo="Definir expiração"
-      descricao="Após a data de expiração, a assinatura passa a ser considerada vencida (modo somente leitura)."
+      descricao="Após a data de expiração, a assinatura passa a ser considerada vencida (acesso suspenso)."
       textoConfirmar="Salvar"
       carregando={carregando}
       desabilitado={!semExpiracao && !data}

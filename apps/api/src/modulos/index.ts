@@ -27,6 +27,8 @@ import * as documentos from './documentos';
 import * as retornos from './retornos';
 import * as dashboard from './dashboard';
 import * as adminCobranca from './admin-cobranca';
+// Contratação de plano pela clínica + planos da landing page
+import * as contratacao from './contratacao';
 
 type ModuloApi = { default: FastifyPluginAsyncZod; prefixo: string };
 
@@ -49,6 +51,7 @@ export const MODULOS: Record<string, ModuloApi> = {
   retornos,
   dashboard,
   'admin-cobranca': adminCobranca,
+  contratacao,
 };
 
 export async function registrarModulos(app: FastifyInstance): Promise<void> {

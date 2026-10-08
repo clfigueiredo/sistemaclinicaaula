@@ -5,7 +5,7 @@
  *   GET    /admin/recursos              catálogo de recursos [{ codigo, nome, tipo: limite|booleano, descricao, ordem }]
  *   GET    /admin/planos                lista planos (com recursos e total_clinicas)
  *   GET    /admin/planos/:id            detalhe
- *   POST   /admin/planos                cria { nome, descricao?, preco?, ativo?, plano_cadastro?, recursos?[] }
+ *   POST   /admin/planos                cria { nome, descricao?, preco?, ativo?, plano_cadastro?, contratavel?, exibir_landing?, recursos?[] }
  *   PUT    /admin/planos/:id            edita (campos opcionais) + recursos numa única requisição:
  *                                       recursos: [{ codigo, habilitado, limite (null = ilimitado), periodo: total|mensal }]
  *   PATCH  /admin/planos/:id/ativo      { ativo } — ativa/desativa (o plano de cadastro não pode ser desativado)
@@ -17,6 +17,8 @@
  * - Só UM plano pode ter plano_cadastro = true (também garantido por índice único parcial no banco).
  * - Plano inativo não pode ser o plano de cadastro.
  * - Recursos liga/desliga (tipo booleano) ignoram limite/período.
+ * - `contratavel`: aparece para a clínica contratar em /planos (módulo contratacao) — só plano pago (preço > 0).
+ * - `exibir_landing`: aparece na landing page (GET /publico/planos); vale também para o plano gratuito.
  */
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { prisma } from '../../lib/prisma';
@@ -37,6 +39,13 @@ const erroDesmarcarCadastro = () =>
     'Deve sempre existir um plano de cadastro. Para trocar, marque outro plano como plano de cadastro.',
   );
 
+const erroContratavelGratuito = () =>
+  new ErroNegocio(
+    409,
+    'plano_gratuito_contratavel',
+    'Um plano gratuito não pode ficar disponível para contratação (não há o que pagar). Defina um preço ou desmarque a opção.',
+  );
+
 const modulo: FastifyPluginAsyncZod = async (app) => {
   app.addHook('onRequest', autenticarAdmin);
 
@@ -51,10 +60,18 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
   app.post('/planos', { schema: { body: CorpoCriarPlano } }, async (request, reply) => {
     const { recursos, plano_cadastro, ...dados } = request.body;
     if (plano_cadastro && !dados.ativo) throw erroCadastroInativo();
+    if (dados.contratavel && !(dados.preco > 0)) throw erroContratavelGratuito();
 
     const plano = await prisma.$transaction(async (tx) => {
       const criado = await tx.plano.create({
-        data: { nome: dados.nome, descricao: dados.descricao ?? null, preco: dados.preco, ativo: dados.ativo },
+        data: {
+          nome: dados.nome,
+          descricao: dados.descricao ?? null,
+          preco: dados.preco,
+          ativo: dados.ativo,
+          contratavel: dados.contratavel,
+          exibir_landing: dados.exibir_landing,
+        },
       });
       await salvarRecursos(tx, criado.id, recursos);
       if (plano_cadastro) await marcarPlanoCadastro(tx, criado.id);
@@ -75,6 +92,8 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
       const cadastroFinal = plano_cadastro ?? atual.plano_cadastro;
       if (atual.plano_cadastro && plano_cadastro === false) throw erroDesmarcarCadastro();
       if (cadastroFinal && !ativoFinal) throw erroCadastroInativo();
+      const precoFinal = dados.preco ?? atual.preco.toNumber();
+      if ((dados.contratavel ?? atual.contratavel) && !(precoFinal > 0)) throw erroContratavelGratuito();
 
       await tx.plano.update({
         where: { id },
@@ -83,6 +102,8 @@ const modulo: FastifyPluginAsyncZod = async (app) => {
           ...(dados.descricao !== undefined && { descricao: dados.descricao }),
           ...(dados.preco !== undefined && { preco: dados.preco }),
           ...(dados.ativo !== undefined && { ativo: dados.ativo }),
+          ...(dados.contratavel !== undefined && { contratavel: dados.contratavel }),
+          ...(dados.exibir_landing !== undefined && { exibir_landing: dados.exibir_landing }),
         },
       });
       if (recursos) await salvarRecursos(tx, id, recursos);

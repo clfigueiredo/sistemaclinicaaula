@@ -121,12 +121,14 @@ O sistema já sai configurado — não precisa criar plano nem clínica na mão.
 - **Landing page** (`seudominio.com.br`): página de teste com botões para o cadastro e o login do painel da
   clínica. Para trocar pela sua, edite os arquivos em `/opt/sistema-clinica/landing/` (vale na hora, sem rebuild).
   No HTML, `{{env "DOMINIO_APP"}}` vira o domínio do painel da clínica — use nos links de cadastro/login.
-- **Painel super admin** (`admin.seudominio.com.br`): planos, clínicas, cobrança. Os planos “Teste grátis” e “Profissional”
-  podem ser editados à vontade.
+- **Painel super admin** (`admin.seudominio.com.br`): planos, clínicas, cobranças e gateways. Os planos “Teste grátis” e
+  “Profissional” podem ser editados à vontade; marque **Disponível para contratação** para a clínica contratar sozinha
+  (menu **Fazer upgrade** → pagamento online) e **Aparece na landing page** para listá-lo no site.
 - **Painel da clínica** (`app.seudominio.com.br`): a “Minha Clínica” já está no plano Profissional, ativa. Troque o nome e os
   dados em **Configurações**, cadastre profissionais e conecte o WhatsApp pelo QR code (menu **WhatsApp**).
 - **Novas clínicas** se cadastram sozinhas em `app.seudominio.com.br/cadastro` (entram no Teste grátis).
-- (Opcional) Em **Cobrança** no super admin, configure o gateway de pagamento (Asaas, Stripe ou Mercado Pago).
+- (Opcional) Em **Gateways** no super admin, configure e **ative** o gateway de pagamento (Asaas, Stripe ou Mercado
+  Pago). Cobrança vencida além da tolerância **suspende o acesso** da clínica até o pagamento (acompanhe em **Cobranças**).
 
 ### Comandos úteis (na VPS)
 

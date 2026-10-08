@@ -16,6 +16,7 @@
       --primary: #0d9488; --primary-dark: #0f766e; --primary-soft: #e6f6f4; --accent: #f59e0b;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    [hidden] { display: none !important; }
     body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
     a { color: inherit; text-decoration: none; }
     .container { width: min(1120px, 100% - 32px); margin-inline: auto; }
@@ -62,6 +63,19 @@
     .cta .btn { background: #fff; color: var(--primary-dark); }
     .cta .btn:hover { background: var(--primary-soft); }
 
+    .planos { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; align-items: stretch; }
+    .plano { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 28px; }
+    .plano.destaque { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+    .plano h3 { font-size: 1.2rem; margin-bottom: 4px; }
+    .plano .desc { color: var(--muted); font-size: .95rem; min-height: 1.5em; }
+    .plano .preco { margin: 18px 0; font-size: 2.2rem; font-weight: 700; letter-spacing: -.02em; }
+    .plano .preco small { font-size: .95rem; font-weight: 500; color: var(--muted); }
+    .plano ul { list-style: none; display: grid; gap: 8px; margin-bottom: 24px; flex: 1; font-size: .95rem; }
+    .plano li { display: flex; gap: 8px; }
+    .plano li::before { content: "✓"; color: var(--primary); font-weight: 700; }
+    .plano .btn { width: 100%; }
+    .plano:not(.destaque) .btn-primary { background: var(--primary-soft); color: var(--primary-dark); }
+
     footer { padding: 32px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: .9rem; }
     footer .container { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 
@@ -78,6 +92,7 @@
     <div class="container nav">
       <a href="/" class="logo"><span>✚</span> Sistema Clínica</a>
       <nav class="nav-links">
+        <a class="btn btn-ghost" href="#planos" id="link-planos" hidden>Planos</a>
         <a class="btn btn-ghost" href="https://{{env "DOMINIO_APP"}}/login">Entrar</a>
         <a class="btn btn-primary" href="https://{{env "DOMINIO_APP"}}/cadastro">Teste grátis</a>
       </nav>
@@ -127,6 +142,18 @@
       </div>
     </section>
 
+    <!-- Planos: preenchido pelo script abaixo com os planos marcados "Aparece na landing page" no super admin.
+         Sem planos marcados (ou se a API não responder), a seção fica escondida. -->
+    <section id="planos" hidden>
+      <div class="container">
+        <div class="titulo-secao">
+          <h2>Planos para cada fase da sua clínica</h2>
+          <p>Comece grátis e mude de plano quando precisar. Pagamento por Pix, boleto ou cartão.</p>
+        </div>
+        <div class="planos" id="lista-planos"></div>
+      </div>
+    </section>
+
     <section>
       <div class="container">
         <div class="cta">
@@ -144,5 +171,54 @@
       <a href="https://{{env "DOMINIO_APP"}}/login">Acessar o sistema</a>
     </div>
   </footer>
+
+  <script>
+    (function () {
+      var APP = 'https://{{env "DOMINIO_APP"}}';
+      var moeda = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+
+      function el(tag, classe, texto) {
+        var e = document.createElement(tag);
+        if (classe) e.className = classe;
+        if (texto != null) e.textContent = texto;
+        return e;
+      }
+
+      function recurso(r) {
+        if (r.tipo === 'booleano') return r.nome;
+        if (r.limite === null) return r.nome + ': ilimitado';
+        return r.nome + ': ' + r.limite.toLocaleString('pt-BR') + (r.periodo === 'mensal' ? '/mês' : '');
+      }
+
+      fetch('/api/publico/planos')
+        .then(function (r) { return r.ok ? r.json() : []; })
+        .then(function (planos) {
+          if (!Array.isArray(planos) || !planos.length) return;
+          var lista = document.getElementById('lista-planos');
+          // Destaque: com 3+ planos pagos, o do meio; senão, o primeiro pago.
+          var pagos = planos.filter(function (p) { return !p.gratuito; });
+          var destaque = pagos.length >= 3 ? pagos[1] : pagos[0];
+
+          planos.forEach(function (p) {
+            var card = el('div', 'plano' + (p === destaque ? ' destaque' : ''));
+            card.appendChild(el('h3', null, p.nome));
+            card.appendChild(el('p', 'desc', p.descricao || ''));
+            var preco = el('div', 'preco', p.gratuito ? 'Grátis' : moeda.format(Number(p.preco)));
+            if (!p.gratuito) preco.appendChild(el('small', null, ' /mês'));
+            card.appendChild(preco);
+            var ul = el('ul');
+            p.recursos.forEach(function (r) { ul.appendChild(el('li', null, recurso(r))); });
+            card.appendChild(ul);
+            var botao = el('a', 'btn btn-primary', p.gratuito ? 'Começar teste grátis' : 'Assinar ' + p.nome);
+            botao.href = APP + '/cadastro' + (p.gratuito ? '' : '?plano=' + encodeURIComponent(p.id));
+            card.appendChild(botao);
+            lista.appendChild(card);
+          });
+          document.getElementById('planos').hidden = false;
+          document.getElementById('link-planos').hidden = false;
+        })
+        .catch(function () { /* sem planos: a seção continua escondida */ });
+    })();
+  </script>
 </body>
 </html>

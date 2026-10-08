@@ -60,6 +60,8 @@ const esquema = z.object({
   }, 'Preço inválido (ex.: 149,90)'),
   ativo: z.boolean(),
   plano_cadastro: z.boolean(),
+  contratavel: z.boolean(),
+  exibir_landing: z.boolean(),
   recursos: z.array(esquemaRecurso),
 });
 type Dados = z.infer<typeof esquema>;
@@ -81,6 +83,8 @@ function valoresIniciais(catalogo: RecursoCatalogo[], plano?: Plano): Dados {
     preco: plano ? Number(plano.preco).toFixed(2).replace('.', ',') : '0,00',
     ativo: plano?.ativo ?? true,
     plano_cadastro: plano?.plano_cadastro ?? false,
+    contratavel: plano?.contratavel ?? false,
+    exibir_landing: plano?.exibir_landing ?? false,
     recursos: catalogo.map((c) => {
       const r = plano?.recursos.find((x) => x.codigo === c.codigo);
       return {
@@ -102,6 +106,9 @@ function paraApi(d: Dados): DadosPlano {
     preco: converterPreco(d.preco) ?? 0,
     ativo: d.ativo,
     plano_cadastro: d.plano_cadastro,
+    // Plano gratuito não é contratável (a API recusa): desmarca em silêncio.
+    contratavel: d.contratavel && (converterPreco(d.preco) ?? 0) > 0,
+    exibir_landing: d.exibir_landing,
     recursos: d.recursos.map((r) =>
       r.tipo === 'limite'
         ? {
@@ -171,6 +178,8 @@ function FormularioPlano({ catalogo, plano }: { catalogo: RecursoCatalogo[]; pla
   }, [plano, catalogo, form]);
 
   const ativo = useWatch({ control: form.control, name: 'ativo' });
+  const precoDigitado = useWatch({ control: form.control, name: 'preco' });
+  const gratuito = !((converterPreco(precoDigitado) ?? 0) > 0);
   const salvando = criar.isPending || editar.isPending;
 
   async function salvar(dados: Dados) {
@@ -345,6 +354,40 @@ function FormularioPlano({ catalogo, plano }: { catalogo: RecursoCatalogo[]; pla
                         onCheckedChange={field.onChange}
                         disabled={plano?.plano_cadastro || !ativo}
                       />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="contratavel"
+                render={({ field }) => (
+                  <FormItem className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="space-y-0.5">
+                      <FormLabel>Disponível para contratação</FormLabel>
+                      <FormDescription>
+                        {gratuito
+                          ? 'Só planos pagos podem ser contratados pela clínica.'
+                          : 'Aparece em "Planos" no painel da clínica, que contrata e paga online (gateway ativo).'}
+                      </FormDescription>
+                    </div>
+                    <FormControl>
+                      <Switch checked={field.value && !gratuito} onCheckedChange={field.onChange} disabled={gratuito} />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="exibir_landing"
+                render={({ field }) => (
+                  <FormItem className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                    <div className="space-y-0.5">
+                      <FormLabel>Aparece na landing page</FormLabel>
+                      <FormDescription>Mostra o plano na seção de planos do site, com preço e recursos inclusos.</FormDescription>
+                    </div>
+                    <FormControl>
+                      <Switch checked={field.value} onCheckedChange={field.onChange} />
                     </FormControl>
                   </FormItem>
                 )}

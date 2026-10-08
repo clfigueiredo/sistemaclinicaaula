@@ -10,6 +10,7 @@ import {
   CalendarClock,
   Contact,
   CreditCard,
+  Receipt,
   Globe,
   LayoutDashboard,
   ListOrdered,
@@ -46,6 +47,7 @@ export const PAPEIS_ROTA = {
   usuarios: ['admin'] as Papel[],
   whatsapp: ['admin'] as Papel[],
   configuracoes: ['admin'] as Papel[],
+  planos: ['admin'] as Papel[],
   onboarding: ['admin'] as Papel[],
   /** Prontuário (abas da ficha do paciente): recepção NÃO vê. */
   prontuario: ['admin', 'profissional'] as Papel[],
@@ -100,7 +102,8 @@ export const MENU_ADMIN: ItemMenu[] = [
   { rotulo: 'Dashboard', caminho: '/admin', icone: LayoutDashboard },
   { rotulo: 'Planos', caminho: '/admin/planos', icone: Package },
   { rotulo: 'Clínicas', caminho: '/admin/clinicas', icone: Building2 },
-  { rotulo: 'Cobrança', caminho: '/admin/cobranca', icone: CreditCard },
+  { rotulo: 'Cobranças', caminho: '/admin/cobrancas', icone: Receipt },
+  { rotulo: 'Gateways', caminho: '/admin/cobranca', icone: CreditCard },
 ];
 
 /** Abas da área financeira (/financeiro/*), na ordem de exibição. */

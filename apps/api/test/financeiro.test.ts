@@ -637,15 +637,14 @@ describe('financeiro — segurança (auditoria)', () => {
     expect(pelaConsulta.json().profissional?.id ?? pelaConsulta.json().profissional_id).toBe(C.prof1.id);
   });
 
-  it('B8: GET de contas/categorias com assinatura inativa não cria nada', async () => {
+  it('B8: GET de contas/categorias com assinatura inativa (acesso suspenso) não cria nada', async () => {
     const D = await criarClinica((await criarPlano(true)).id);
     await prisma.assinatura.update({ where: { clinica_id: D.clinica.id }, data: { status: 'vencida' } });
     const contas = await req(D.admin, 'GET', '/financeiro/contas');
-    expect(contas.statusCode).toBe(200);
-    expect(contas.json()).toEqual([]);
+    expect(contas.statusCode).toBe(403);
+    expect(contas.json().erro).toBe('assinatura_inativa');
     const cats = await req(D.recepcao, 'GET', '/financeiro/categorias');
-    expect(cats.statusCode).toBe(200);
-    expect(cats.json()).toEqual([]);
+    expect(cats.statusCode).toBe(403);
     expect(await prisma.contaFinanceira.count({ where: { clinica_id: D.clinica.id } })).toBe(0);
     expect(await prisma.categoriaFinanceira.count({ where: { clinica_id: D.clinica.id } })).toBe(0);
   });

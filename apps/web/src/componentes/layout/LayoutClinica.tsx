@@ -1,12 +1,12 @@
 import { Suspense } from 'react';
 import { Link, Outlet, useNavigate } from 'react-router-dom';
-import { AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/contextos/AuthContext';
 import { useMe } from '@/api/me';
 import { ROTULOS_PAPEL, ROTULOS_STATUS_ASSINATURA } from '@/api/tipos';
 import { MENU_CLINICA, itensPermitidos } from '@/rotas/navegacao';
 import { Carregando } from '@/componentes/comum';
 import { Badge } from '@/componentes/ui/badge';
+import { AcessoSuspenso } from './AcessoSuspenso';
 import { Estrutura } from './Estrutura';
 import { SinoAvisos } from './SinoAvisos';
 import AvisoTopoSolicitacoes from '@/paginas/clinica/solicitacoes/AvisoTopoSolicitacoes';
@@ -25,6 +25,8 @@ export function LayoutClinica() {
 
   const somenteLeitura = me.assinatura?.somente_leitura;
   const status = me.assinatura?.status;
+  // Assinatura vencida/cancelada/bloqueada: acesso suspenso (a API recusa todo o resto) — só a tela de pagamento.
+  if (somenteLeitura) return <AcessoSuspenso me={me} aoSair={sair} />;
   // Avisos de cancelamento via WhatsApp: admin e recepção, se o plano tiver WhatsApp.
   const equipe = me.papel === 'admin' || me.papel === 'recepcao';
   const mostrarAvisos = equipe && !!me.recursos.whatsapp?.habilitado;
@@ -57,20 +59,16 @@ export function LayoutClinica() {
             )}
           </div>
           {me.papel === 'admin' && (
-            <Link to="/configuracoes" className="inline-block text-primary hover:underline">
-              Ver uso e limites
-            </Link>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <Link to="/configuracoes" className="text-primary hover:underline">
+                Ver uso e limites
+              </Link>
+              <Link to="/planos" className="font-medium text-primary hover:underline">
+                {me.plano && Number(me.plano.preco) > 0 ? 'Ver planos' : 'Fazer upgrade'}
+              </Link>
+            </div>
           )}
         </div>
-      }
-      aviso={
-        somenteLeitura ? (
-          <div className="flex items-center gap-2 border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-sm text-destructive sm:px-6">
-            <AlertTriangle className="size-4 shrink-0" />
-            Sua assinatura está {status ? ROTULOS_STATUS_ASSINATURA[status].toLowerCase() : 'inativa'}: o sistema
-            está em modo somente leitura.
-          </div>
-        ) : null
       }
     >
       <Suspense fallback={<Carregando />}>

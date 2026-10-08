@@ -27,6 +27,7 @@ const DetalhePlano = p(() => import('@/paginas/admin/planos/DetalhePlano'));
 const ListaClinicas = p(() => import('@/paginas/admin/clinicas/ListaClinicas'));
 const DetalheClinica = p(() => import('@/paginas/admin/clinicas/DetalheClinica'));
 const AdminCobranca = p(() => import('@/paginas/admin/cobranca/Cobranca'));
+const AdminCobrancas = p(() => import('@/paginas/admin/cobranca/PaginaCobrancas'));
 
 // Clínica
 const Agenda = p(() => import('@/paginas/clinica/agenda/Agenda'));
@@ -39,6 +40,7 @@ const Usuarios = p(() => import('@/paginas/clinica/usuarios/Usuarios'));
 const WhatsApp = p(() => import('@/paginas/clinica/whatsapp/WhatsApp'));
 const Onboarding = p(() => import('@/paginas/clinica/onboarding/Onboarding'));
 const Configuracoes = p(() => import('@/paginas/clinica/configuracoes/Configuracoes'));
+const Planos = p(() => import('@/paginas/clinica/planos/Planos'));
 // Clínica — fase 2 do produto
 const Dashboard = p(() => import('@/paginas/clinica/dashboard/Dashboard'));
 const Solicitacoes = p(() => import('@/paginas/clinica/solicitacoes/Solicitacoes'));
@@ -92,6 +94,7 @@ export const router = createBrowserRouter([
               { path: 'clinicas', element: <ListaClinicas /> },
               { path: 'clinicas/:id', element: <DetalheClinica /> },
               { path: 'cobranca', element: <AdminCobranca /> },
+              { path: 'cobrancas', element: <AdminCobrancas /> },
             ],
           },
         ],
@@ -125,6 +128,7 @@ export const router = createBrowserRouter([
                 path: 'configuracoes',
                 element: <RotaClinica papeis={PAPEIS_ROTA.configuracoes}><Configuracoes /></RotaClinica>,
               },
+              { path: 'planos', element: <RotaClinica papeis={PAPEIS_ROTA.planos}><Planos /></RotaClinica> },
               // ---------------- Fase 2 do produto (docs/FASE2.md)
               {
                 path: 'dashboard',

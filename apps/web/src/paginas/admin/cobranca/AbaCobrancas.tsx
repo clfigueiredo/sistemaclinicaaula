@@ -1,6 +1,8 @@
 /**
- * Aba "Cobranças": cobranças de todas as clínicas (filtros por status/clínica/período), totais, gerar
- * cobrança avulsa, ligar/desligar a cobrança automática de uma clínica, cancelar, abrir/copiar/reenviar link.
+ * Lista de cobranças de todas as clínicas (página /admin/cobrancas): filtros rápidos por situação (a vencer, em
+ * atraso, inadimplentes, pagas, canceladas), clínica e período, totais, gerar cobrança avulsa, ligar/desligar a
+ * cobrança automática, baixa manual, cancelar, abrir/copiar/reenviar link. Mostra quando cada clínica perde o
+ * acesso (`bloqueia_em`) e a situação atual do acesso.
  */
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -12,6 +14,7 @@ import {
   Ban,
   CalendarClock,
   CheckCircle2,
+  CircleDollarSign,
   Clock,
   Copy,
   ExternalLink,
@@ -32,20 +35,21 @@ import {
   useCriarCobranca,
   useDesativarCobrancaClinica,
   useGatewaysPagamento,
+  usePagarManual,
   type CobrancaAdmin,
   type FiltrosCobrancas,
+  type SituacaoCobranca,
 } from '@/api/adminCobranca';
 import { useListaClinicasAdmin } from '@/api/adminClinicas';
 import { mensagemDeErro } from '@/api/cliente';
 import {
   ROTULOS_METODO_COBRANCA,
   ROTULOS_PROVEDOR_PAGAMENTO,
-  ROTULOS_STATUS_COBRANCA,
   type MetodoCobranca,
-  type StatusCobranca,
 } from '@/api/tipos';
 import { Carregando, EstadoVazio } from '@/componentes/comum';
 import { Alert, AlertDescription } from '@/componentes/ui/alert';
+import { Badge } from '@/componentes/ui/badge';
 import { Button } from '@/componentes/ui/button';
 import { Card } from '@/componentes/ui/card';
 import { Checkbox } from '@/componentes/ui/checkbox';
@@ -78,9 +82,40 @@ const POR_PAGINA = 20;
 const TODOS = 'todos';
 const SEM_METODO = 'qualquer';
 
+const SITUACOES: { valor: SituacaoCobranca | ''; rotulo: string; dica: string }[] = [
+  { valor: '', rotulo: 'Todas', dica: 'Todas as cobranças' },
+  { valor: 'a_vencer', rotulo: 'A vencer (7 dias)', dica: 'Pendentes com vencimento nos próximos 7 dias' },
+  { valor: 'em_atraso', rotulo: 'Em atraso', dica: 'Venceram, mas a clínica ainda tem acesso (dentro da tolerância)' },
+  { valor: 'inadimplente', rotulo: 'Inadimplentes', dica: 'Em dívida e com o acesso da clínica já suspenso' },
+  { valor: 'paga', rotulo: 'Pagas', dica: 'Pagamento confirmado' },
+  { valor: 'cancelada', rotulo: 'Canceladas/estornadas', dica: 'Canceladas, estornadas ou com chargeback' },
+];
+
+function hojeIso() {
+  return dataIsoMaisDias(0);
+}
+
+/** "bloqueia em 3 dias" / "bloqueia hoje" / "sem acesso desde dd/mm" — situação do acesso pela cobrança. */
+function AvisoBloqueio({ c }: { c: CobrancaAdmin }) {
+  if (c.contratacao && (c.status === 'pendente' || c.status === 'vencida')) {
+    return <p className="text-xs text-muted-foreground">contratação: libera o plano ao pagar</p>;
+  }
+  if (!c.bloqueia_em) return null;
+  const suspensa = c.acesso && ['vencida', 'cancelada', 'bloqueada'].includes(c.acesso.status);
+  if (suspensa) return <p className="text-xs font-medium text-destructive">acesso suspenso</p>;
+  const hoje = hojeIso();
+  const dias = Math.round((Date.parse(c.bloqueia_em) - Date.parse(hoje)) / 86_400_000);
+  if (c.vencimento >= hoje) return <p className="text-xs text-muted-foreground">bloqueia em {formatarData(c.bloqueia_em)} se não pagar</p>;
+  return (
+    <p className="text-xs font-medium text-warning">
+      {dias <= 0 ? 'bloqueia hoje' : `bloqueia em ${dias} dia${dias > 1 ? 's' : ''} (${formatarData(c.bloqueia_em)})`}
+    </p>
+  );
+}
+
 export default function AbaCobrancas() {
   const [params, setParams] = useSearchParams();
-  const status = (params.get('status') ?? '') as StatusCobranca | '';
+  const situacao = (params.get('situacao') ?? '') as SituacaoCobranca | '';
   const clinicaId = params.get('clinica') ?? '';
   const de = params.get('de') ?? '';
   const ate = params.get('ate') ?? '';
@@ -88,6 +123,7 @@ export default function AbaCobrancas() {
 
   const [dialogo, setDialogo] = useState<'gerar' | 'automatica' | null>(null);
   const [cancelando, setCancelando] = useState<CobrancaAdmin | null>(null);
+  const [baixando, setBaixando] = useState<CobrancaAdmin | null>(null);
   const cancelar = useCancelarCobranca();
   const clinicas = useListaClinicasAdmin({ porPagina: 100 });
   const gateways = useGatewaysPagamento();
@@ -104,7 +140,7 @@ export default function AbaCobrancas() {
   }
 
   const filtros: FiltrosCobrancas = {
-    status: status || undefined,
+    situacao: situacao || undefined,
     clinica_id: clinicaId || undefined,
     de: de || undefined,
     ate: ate || undefined,
@@ -112,7 +148,7 @@ export default function AbaCobrancas() {
     por_pagina: POR_PAGINA,
   };
   const { data, isLoading, isError, error, refetch } = useCobrancas(filtros);
-  const temFiltro = !!(status || clinicaId || de || ate);
+  const temFiltro = !!(situacao || clinicaId || de || ate);
 
   function reenviar(c: CobrancaAdmin) {
     if (!c.link_pagamento) return;
@@ -125,24 +161,23 @@ export default function AbaCobrancas() {
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Situação da cobrança">
+        {SITUACOES.map((st) => (
+          <Button
+            key={st.valor || 'todas'}
+            size="sm"
+            variant={situacao === st.valor ? 'default' : 'outline'}
+            title={st.dica}
+            aria-pressed={situacao === st.valor}
+            onClick={() => atualizar({ situacao: st.valor })}
+          >
+            {st.rotulo}
+          </Button>
+        ))}
+      </div>
+
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-end">
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">Status</Label>
-            <Select value={status || TODOS} onValueChange={(v) => atualizar({ status: v })}>
-              <SelectTrigger className="w-full sm:w-40" aria-label="Status da cobrança">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={TODOS}>Todos os status</SelectItem>
-                {(Object.keys(ROTULOS_STATUS_COBRANCA) as StatusCobranca[]).map((s) => (
-                  <SelectItem key={s} value={s}>
-                    {ROTULOS_STATUS_COBRANCA[s]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
           <div className="space-y-1">
             <Label className="text-xs text-muted-foreground">Clínica</Label>
             <Select value={clinicaId || TODOS} onValueChange={(v) => atualizar({ clinica: v })}>
@@ -172,7 +207,7 @@ export default function AbaCobrancas() {
             <Input id="filtro-ate" type="date" value={ate} onChange={(e) => atualizar({ ate: e.target.value })} className="sm:w-40" />
           </div>
           {temFiltro && (
-            <Button variant="ghost" onClick={() => setParams(new URLSearchParams(params.get('aba') ? { aba: params.get('aba')! } : {}), { replace: true })}>
+            <Button variant="ghost" onClick={() => setParams(new URLSearchParams(), { replace: true })}>
               <X /> Limpar
             </Button>
           )}
@@ -191,13 +226,13 @@ export default function AbaCobrancas() {
         <Alert>
           <AlertCircle />
           <AlertDescription>
-            <p>Nenhum gateway ativo: não é possível gerar cobranças. Ative um na aba <strong>Gateways</strong>.</p>
+            <p>Nenhum gateway ativo: não é possível gerar cobranças. Ative um em <strong>Gateways</strong>, no menu.</p>
           </AlertDescription>
         </Alert>
       )}
 
       {data && (
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <CardKpi
             titulo="Recebido"
             valor={formatarMoeda(data.totais.recebido)}
@@ -206,9 +241,15 @@ export default function AbaCobrancas() {
             destaque="sucesso"
           />
           <CardKpi
+            titulo="A vencer (7 dias)"
+            valor={formatarMoeda(data.totais.a_vencer)}
+            detalhe={`${data.totais.quantidade.a_vencer} cobrança(s)`}
+            icone={<CalendarClock className="size-5" />}
+          />
+          <CardKpi
             titulo="Pendente"
             valor={formatarMoeda(data.totais.pendente)}
-            detalhe={`${data.totais.quantidade.pendente} a vencer`}
+            detalhe={`${data.totais.quantidade.pendente} em aberto`}
             icone={<Clock className="size-5" />}
           />
           <CardKpi
@@ -245,6 +286,7 @@ export default function AbaCobrancas() {
                   <TableHead>Vencimento</TableHead>
                   <TableHead className="text-right">Valor</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="hidden lg:table-cell">Acesso da clínica</TableHead>
                   <TableHead className="hidden md:table-cell">Gateway</TableHead>
                   <TableHead className="w-12 pr-4">
                     <span className="sr-only">Ações</span>
@@ -256,15 +298,33 @@ export default function AbaCobrancas() {
                   <TableRow key={c.id}>
                     <TableCell className="max-w-72 pl-4">
                       <p className="truncate font-medium">{c.clinica.nome}</p>
-                      <p className="truncate text-xs text-muted-foreground">{c.descricao ?? '—'}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {c.contratacao && (
+                          <Badge variant="outline" className="mr-1 px-1.5 py-0 text-[10px]">
+                            Contratação{c.plano_contratado_nome ? `: ${c.plano_contratado_nome}` : ''}
+                          </Badge>
+                        )}
+                        {c.descricao ?? '—'}
+                      </p>
                     </TableCell>
                     <TableCell className="tabular-nums">
                       {formatarData(c.vencimento)}
                       {c.pago_em && <p className="text-xs text-muted-foreground">pago em {formatarData(c.pago_em)}</p>}
+                      <AvisoBloqueio c={c} />
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{formatarMoeda(c.valor)}</TableCell>
                     <TableCell>
                       <BadgeStatusCobranca status={c.status} />
+                    </TableCell>
+                    <TableCell className="hidden lg:table-cell">
+                      {c.acesso ? (
+                        <div className="space-y-0.5">
+                          <BadgeStatusAssinatura status={c.acesso.status} />
+                          <p className="text-xs text-muted-foreground">{c.acesso.plano}</p>
+                        </div>
+                      ) : (
+                        <BadgeStatusAssinatura status={null} />
+                      )}
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground md:table-cell">
                       {ROTULOS_PROVEDOR_PAGAMENTO[c.gateway]}
@@ -300,6 +360,12 @@ export default function AbaCobrancas() {
                             onSelect={() => reenviar(c)}
                           >
                             <Mail /> Reenviar link por e-mail
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={!['pendente', 'vencida'].includes(c.status)}
+                            onSelect={() => setBaixando(c)}
+                          >
+                            <CircleDollarSign /> Dar baixa manual
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
@@ -344,6 +410,8 @@ export default function AbaCobrancas() {
           aoFechar={() => setDialogo(null)}
         />
       )}
+
+      {baixando && <DialogoBaixaManual cobranca={baixando} aoFechar={() => setBaixando(null)} />}
 
       <DialogoConfirmacao
         aberto={!!cancelando}
@@ -458,7 +526,7 @@ export function DialogoGerarCobranca({
           <DialogDescription>
             {nomeGateway
               ? `Cobrança avulsa emitida no ${nomeGateway} (gateway ativo).`
-              : 'Nenhum gateway ativo — ative um na aba Gateways antes de gerar.'}
+              : 'Nenhum gateway ativo — ative um em Gateways (menu) antes de gerar.'}
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
@@ -626,7 +694,7 @@ export function DialogoCobrancaAutomatica({
           <DialogTitle>Cobrança automática</DialogTitle>
           <DialogDescription>
             Todo mês o sistema gera a cobrança da mensalidade no gateway ativo{nomeGateway ? ` (${nomeGateway})` : ''}, até 10
-            dias antes do vencimento. Sem pagamento após a tolerância, a assinatura fica vencida (somente leitura) e volta a
+            dias antes do vencimento. Sem pagamento após a tolerância, a assinatura fica vencida (acesso suspenso) e volta a
             ativa quando o pagamento é confirmado.
           </DialogDescription>
         </DialogHeader>
@@ -722,8 +790,70 @@ export function DialogoCobrancaAutomatica({
           </Button>
         </DialogFooter>
         {!nomeGateway && (
-          <p className="text-xs text-muted-foreground">Ative um gateway na aba Gateways para ligar a cobrança automática.</p>
+          <p className="text-xs text-muted-foreground">Ative um gateway em Gateways (menu) para ligar a cobrança automática.</p>
         )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Baixa manual: pagamento recebido fora do gateway (transferência, dinheiro…). */
+function DialogoBaixaManual({ cobranca, aoFechar }: { cobranca: CobrancaAdmin; aoFechar: () => void }) {
+  const pagar = usePagarManual();
+  const [pagoEm, setPagoEm] = useState(hojeIso());
+  const valido = /^\d{4}-\d{2}-\d{2}$/.test(pagoEm) && pagoEm <= hojeIso();
+
+  function confirmar() {
+    pagar.mutate(
+      { id: cobranca.id, pago_em: pagoEm },
+      {
+        onSuccess: (r) => {
+          toast.success('Baixa registrada: cobrança marcada como paga.');
+          if (r.aviso) toast.warning(r.aviso, { duration: 12_000 });
+          aoFechar();
+        },
+        onError: (e) => toast.error(mensagemDeErro(e)),
+      },
+    );
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && !pagar.isPending && aoFechar()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Dar baixa manual</DialogTitle>
+          <DialogDescription>
+            {cobranca.clinica.nome} · {formatarMoeda(cobranca.valor)} · vencimento {formatarData(cobranca.vencimento)}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 text-sm">
+          <p className="text-muted-foreground">
+            Use quando o pagamento foi recebido fora do {ROTULOS_PROVEDOR_PAGAMENTO[cobranca.gateway]} (transferência,
+            dinheiro…). A cobrança fica paga, a clínica volta a ter acesso
+            {cobranca.contratacao ? ' e o plano contratado é liberado' : ''}, e a cobrança é cancelada no gateway para não
+            ser paga duas vezes.
+          </p>
+          <div className="space-y-1">
+            <Label htmlFor="baixa-pago-em">Data do pagamento</Label>
+            <Input
+              id="baixa-pago-em"
+              type="date"
+              value={pagoEm}
+              max={hojeIso()}
+              onChange={(e) => setPagoEm(e.target.value)}
+              className="sm:w-44"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={aoFechar} disabled={pagar.isPending}>
+            Voltar
+          </Button>
+          <Button onClick={confirmar} disabled={!valido || pagar.isPending}>
+            {pagar.isPending && <Loader2 className="animate-spin" />}
+            Confirmar baixa
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

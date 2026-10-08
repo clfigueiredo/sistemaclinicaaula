@@ -1,4 +1,5 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { destinoAposCadastro } from '@/componentes/layout/Guardas';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -40,6 +41,7 @@ const CAMPOS_API: Record<string, keyof Dados> = {
 
 export default function PaginaCadastro() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { entrarClinica } = useAuth();
   const cadastro = useCadastro();
   const form = useForm<Dados>({
@@ -55,7 +57,7 @@ export default function PaginaCadastro() {
         telefone: somenteDigitos(dados.telefone),
       });
       entrarClinica(r.token);
-      navigate('/onboarding', { replace: true });
+      navigate(destinoAposCadastro(location.search), { replace: true });
     } catch (e) {
       if (e instanceof ErroApi) {
         if (e.codigo === 'email_em_uso') form.setError('email', { message: e.mensagem });

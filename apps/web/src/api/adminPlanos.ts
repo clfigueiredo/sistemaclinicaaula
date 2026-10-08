@@ -40,6 +40,10 @@ export type Plano = {
   preco: string;
   ativo: boolean;
   plano_cadastro: boolean;
+  /** Aparece em "Planos" no painel da clínica para contratação com pagamento online. */
+  contratavel: boolean;
+  /** Aparece na landing page. */
+  exibir_landing: boolean;
   criado_em: string;
   atualizado_em: string;
   total_clinicas: number;
@@ -59,6 +63,8 @@ export type DadosPlano = {
   preco: number;
   ativo?: boolean;
   plano_cadastro?: boolean;
+  contratavel?: boolean;
+  exibir_landing?: boolean;
   recursos: ConfigRecursoPlano[];
 };
 
